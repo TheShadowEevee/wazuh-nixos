@@ -137,6 +137,24 @@ pkgs.testers.runNixOSTest {
             manager_state()
             raise
 
+    with subtest("a key from wazuh-agentd counts as an enrollment"):
+        # wazuh-agentd enrolls by itself when it starts with no key. If the
+        # unit failed first, the agent has a key and no marker. Reproduce that
+        # state: remove the marker and keep the key. The unit must then skip,
+        # write the marker again, and not ask authd for the same name. Before
+        # the ExecCondition, this restart failed with "Duplicate agent name".
+        agent.succeed("rm -f /var/ossec/var/.agent-registered")
+        agent.succeed("systemctl restart wazuh-agent-auth.service")
+        agent.succeed("test -e /var/ossec/var/.agent-registered")
+        agent.succeed("test -s /var/ossec/etc/client.keys")
+        agent.fail(
+            "journalctl -u wazuh-agent-auth.service | grep -q 'Duplicate agent name'"
+        )
+        manager.succeed(
+            "test $(docker exec wazuh-manager"
+            " grep -c ' example-agent ' /var/ossec/etc/client.keys) = 1"
+        )
+
     with subtest("the agent connects to remoted"):
         # The daemons started before a key existed. Restart them by name:
         # restarting the target does not restart what the target wants.
