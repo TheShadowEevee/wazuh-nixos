@@ -259,41 +259,47 @@ repositories only.
 
 ## Move to a new Wazuh version
 
-The agent and the server share one source pin in `pkgs/common/default.nix`.
-The indexer and the dashboard have their own release pins.
+`scripts/upgrade-wazuh.sh` moves every Wazuh pin in the repository to one
+version. The agent and the server share one source pin in
+`pkgs/common/default.nix`. The indexer and the dashboard have their own
+release pins.
 
-1. Move the `modules/wazuh` submodule to the new tag.
-2. Read `DEPS_VERSION` in `src/Makefile` at that tag.
-3. Read `HTTP_REQUEST_BRANCH` in the same file.
-4. Regenerate the agent dependency hashes.
+Run the script on a host that can reach GitHub, `packages.wazuh.com` and
+Docker Hub.
 
-   ```bash
-   cd pkgs/dependencies
-   DEPS_VERSION=<new value> WAZUH_VERSION=<new tag> \
-     HTTP_REQUEST_REV=<new commit> ./prefetch-external-dependencies.sh
-   ```
-
-5. Copy the three hashes that the script prints into `pkgs/common/default.nix`.
-   The script output names `pkgs/wazuh-agent.nix`, which is the old location.
-6. Set `version`, `dependencyVersion`, and `wazuhRev` in `pkgs/common/default.nix`.
-7. Regenerate the server dependency hashes.
+1. In VS Code, run the task **Wazuh: upgrade to a new version**.
+   Alternatively, run the script in a terminal:
 
    ```bash
-   ./pkgs/wazuh-server/prefetch-dependencies.sh
+   nix develop --command ./scripts/upgrade-wazuh.sh 4.14.10
    ```
 
-8. Set `version` and `revision` in `pkgs/wazuh-indexer/source.json` and
-   `pkgs/wazuh-dashboard/source.json`.
-9. Regenerate the indexer and dashboard release hashes.
+2. Enter a version without the `v`, or `latest` for the newest release.
+3. Read the changes with `git diff` and `git diff --cached modules/wazuh`.
+4. Run the checks, then commit.
 
-   ```bash
-   ./pkgs/wazuh-indexer/prefetch.sh
-   ```
+The script does these steps:
 
-10. Pin the manager container image for `checks.enrollment`. See
-    [Run the enrollment test](nixos/wazuh-agent/README.md#run-the-enrollment-test).
+1. It reads the commit of the tag `v<version>` on `wazuh/wazuh`.
+2. It reads `DEPS_VERSION` and `HTTP_REQUEST_BRANCH` from `src/Makefile` at that tag.
+3. It writes `version`, `dependencyVersion`, `wazuhRev` and the hashes of the
+   GitHub sources into `pkgs/common/default.nix`.
+4. It moves `pkgs/wazuh-testing.nix` to the same `qa-integration-framework` tag.
+   If that tag does not exist, the file does not change.
+5. It runs `pkgs/dependencies/prefetch-external-dependencies.sh` and
+   `pkgs/wazuh-server/prefetch-dependencies.sh`.
+6. It sets `version` and `revision` in `pkgs/wazuh-indexer/source.json` and
+   `pkgs/wazuh-dashboard/source.json`, then runs `pkgs/wazuh-indexer/prefetch.sh`.
+7. It pins the manager container image for `checks.enrollment`. See
+   [Run the enrollment test](nixos/wazuh-agent/README.md#run-the-enrollment-test).
+   The image is several GB. Use `--skip-manager-image` to skip this step.
+8. It moves the `modules/wazuh` submodule commit.
 
-`prefetch-external-dependencies.sh` rewrites
-`pkgs/dependencies/external_dependencies.nix`. Each script writes nothing if
-any download fails. Run the scripts on a host that can reach
-`packages.wazuh.com`.
+The script does not commit. If a step fails, the script restores every pin
+file and exits 1. If the pins already name the version, the script changes
+nothing. The last line of its output is `changed <old> <new>` or
+`current <version>`. Run `./scripts/upgrade-wazuh.sh --help` for all options.
+
+The script does not move the `libbpf-bootstrap` rev in `pkgs/common/default.nix`.
+If the build of a new version fails in the eBPF step, read that rev in the
+upstream source.

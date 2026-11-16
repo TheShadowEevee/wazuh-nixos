@@ -220,6 +220,8 @@
             pkgs.gitMinimal
             # examples/show-cpe-map.sh pretty-prints with it.
             pkgs.jq
+            # scripts/upgrade-wazuh.sh and the prefetch scripts hash with it.
+            pkgs.openssl
           ];
         };
       }

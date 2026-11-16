@@ -8,7 +8,7 @@
 # prefetch-manager-image.sh and committed. Nothing in this file is edited by
 # hand.
 #
-# Keep `version` in step with `version` in pkgs/wazuh-agent.nix. Wazuh supports
+# Keep `version` in step with `version` in pkgs/common/default.nix. Wazuh supports
 # an agent older than its manager. It does not support an agent newer than its
 # manager, so a stale pin fails in a way that looks like a module bug. The
 # check below compares the two rather than trust them to match.

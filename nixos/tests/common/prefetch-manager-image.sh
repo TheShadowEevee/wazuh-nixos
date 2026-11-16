@@ -13,7 +13,7 @@
 #   ./prefetch-manager-image.sh 4.14.7
 #   ./prefetch-manager-image.sh 4.14.7 arm64
 #
-# The version must match `version` in pkgs/wazuh-agent.nix and `version` in
+# The version must match `version` in pkgs/common/default.nix and `version` in
 # wazuh-manager-image.nix. Wazuh supports an agent older than its manager. It
 # does not support an agent newer than its manager.
 #

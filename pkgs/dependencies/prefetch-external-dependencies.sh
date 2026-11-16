@@ -11,7 +11,7 @@
 #   DEPS_VERSION=54 EXTRA_DEPS="flatbuffers jemalloc" ./prefetch-external-dependencies.sh
 #
 # The script writes external_dependencies.nix next to itself. It also prints the
-# hashes for wazuh-http-request and modern.bpf.c, which pkgs/wazuh-agent.nix
+# hashes for wazuh-http-request and modern.bpf.c, which pkgs/common/default.nix
 # pins separately.
 #
 # Nix is optional. With nix-prefetch-url present the script uses it. Without it
@@ -24,7 +24,7 @@ set -euo pipefail
 DEPS_VERSION="${DEPS_VERSION:-54}"
 
 # Wazuh tag the derivation builds. Used for the two extra hashes at the end.
-WAZUH_VERSION="${WAZUH_VERSION:-4.14.7}"
+WAZUH_VERSION="${WAZUH_VERSION:-4.14.8}"
 
 # Commit that src/Makefile pins at HTTP_REQUEST_BRANCH for the tag above.
 HTTP_REQUEST_REV="${HTTP_REQUEST_REV:-cd50797cfe03c27f3759bdc243fecca6f7535d35}"
@@ -159,9 +159,9 @@ command -v alejandra >/dev/null 2>&1 && alejandra --quiet "${out_file}"
 echo >&2
 echo "Wrote ${out_file}" >&2
 
-# Two hashes that pkgs/wazuh-agent.nix pins outside this file.
+# Two hashes that pkgs/common/default.nix pins outside this file.
 echo >&2
-echo "Also update pkgs/wazuh-agent.nix with:" >&2
+echo "Also update pkgs/common/default.nix with:" >&2
 
 # fetchFromGitHub hashes cover the unpacked tree, so --unpack is required.
 prefetch_github() {
