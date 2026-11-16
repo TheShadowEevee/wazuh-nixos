@@ -14,7 +14,18 @@ base_url="${BASE_URL:-https://packages.wazuh.com/deps/${dependency_version}/libr
 manifest="$work_dir/dependency-hashes.json"
 printf '{\n' > "$manifest"
 separator=''
-for name in cpython_x86_64 cpython_arm64 jemalloc flatbuffers simdjson; do
+# SERVER_DEPS names the manager-only archives, as in the EXTERNAL_RES "+=" line
+# of src/Makefile. scripts/upgrade-wazuh.sh sets it from the target tag.
+# cpython has one archive per architecture, so it expands to both.
+read -r -a server_deps <<<"${SERVER_DEPS:-cpython jemalloc flatbuffers simdjson}"
+names=()
+for name in "${server_deps[@]}"; do
+  case "$name" in
+    cpython) names+=(cpython_x86_64 cpython_arm64) ;;
+    *) names+=("$name") ;;
+  esac
+done
+for name in "${names[@]}"; do
   curl --fail --location --retry 2 "$base_url/$name.tar.gz" -o "$work_dir/$name.tar.gz"
   gzip -t "$work_dir/$name.tar.gz"
   # Check archive roots as well as compression, especially the per-arch cpython.

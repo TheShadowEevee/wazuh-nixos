@@ -243,6 +243,29 @@ http_rev="$(sed -n 's/^HTTP_REQUEST_BRANCH[ ]*[?:]*=[ ]*\([0-9a-f]\{40\}\)[ ]*$/
 [ -n "${http_rev}" ] || die "cannot read a commit from HTTP_REQUEST_BRANCH in src/Makefile at v${target}."
 say "wazuh rev ${wazuh_rev}, DEPS_VERSION ${deps_version}, HTTP_REQUEST_BRANCH ${http_rev}."
 
+# The dependency names come from EXTERNAL_RES in the same Makefile, so a new
+# upstream dependency gets a hash without a script edit. The first ":=" line is
+# the agent set. The "+=" line in the manager branch adds the server-only names.
+agent_deps="$(sed -n 's/^EXTERNAL_RES[ ]*:=[ ]*//p' <<<"${makefile}" | head -n1)"
+server_deps="$(sed -n 's/^[[:space:]]*EXTERNAL_RES[ ]*+=[ ]*//p' <<<"${makefile}" | head -n1)"
+server_deps="${server_deps//\$(CPYTHON)/cpython}"
+for list in "${agent_deps}" "${server_deps}"; do
+	[ -n "${list// /}" ] || die "cannot read EXTERNAL_RES from src/Makefile at v${target}."
+	read -r -a names <<<"${list}"
+	for name in "${names[@]}"; do
+		[[ "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] ||
+			die "src/Makefile at v${target} has an EXTERNAL_RES entry that this script cannot read: '${name}'."
+	done
+done
+for name in openssl zlib; do
+	[[ " ${agent_deps} " == *" ${name} "* ]] ||
+		die "the agent EXTERNAL_RES list at v${target} has no ${name}. The Makefile format changed."
+done
+[[ " ${server_deps} " == *" cpython "* ]] ||
+	die "the manager EXTERNAL_RES list at v${target} has no cpython. The Makefile format changed."
+say "agent dependencies: ${agent_deps}"
+say "server dependencies: ${server_deps}"
+
 # 3. Hash the GitHub sources.
 say "hashing the GitHub sources."
 wazuh_sri="$(unpacked_sri "https://github.com/wazuh/wazuh/archive/${wazuh_rev}.tar.gz")"
@@ -275,9 +298,9 @@ fi
 # 6. Agent and server dependency archives from packages.wazuh.com.
 say "hashing the agent dependency archives."
 DEPS_VERSION="${deps_version}" WAZUH_VERSION="${target}" HTTP_REQUEST_REV="${http_rev}" \
-	./pkgs/dependencies/prefetch-external-dependencies.sh >/dev/null
+	DEPS_LIST="${agent_deps}" ./pkgs/dependencies/prefetch-external-dependencies.sh >/dev/null
 say "hashing the server dependency archives."
-./pkgs/wazuh-server/prefetch-dependencies.sh
+SERVER_DEPS="${server_deps}" ./pkgs/wazuh-server/prefetch-dependencies.sh
 
 # 7. Indexer and dashboard packages.
 for component in indexer dashboard; do

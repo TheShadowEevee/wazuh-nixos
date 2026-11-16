@@ -281,13 +281,16 @@ Docker Hub.
 The script does these steps:
 
 1. It reads the commit of the tag `v<version>` on `wazuh/wazuh`.
-2. It reads `DEPS_VERSION` and `HTTP_REQUEST_BRANCH` from `src/Makefile` at that tag.
+2. It reads `DEPS_VERSION`, `HTTP_REQUEST_BRANCH` and the `EXTERNAL_RES`
+   dependency lists from `src/Makefile` at that tag. The agent list is the
+   `EXTERNAL_RES :=` line. The server adds the names on the `EXTERNAL_RES +=` line.
+   A new upstream dependency thus gets a hash without an edit.
 3. It writes `version`, `dependencyVersion`, `wazuhRev` and the hashes of the
    GitHub sources into `pkgs/common/default.nix`.
 4. It moves `pkgs/wazuh-testing.nix` to the same `qa-integration-framework` tag.
    If that tag does not exist, the file does not change.
 5. It runs `pkgs/dependencies/prefetch-external-dependencies.sh` and
-   `pkgs/wazuh-server/prefetch-dependencies.sh`.
+   `pkgs/wazuh-server/prefetch-dependencies.sh` with the lists from step 2.
 6. It sets `version` and `revision` in `pkgs/wazuh-indexer/source.json` and
    `pkgs/wazuh-dashboard/source.json`, then runs `pkgs/wazuh-indexer/prefetch.sh`.
 7. It pins the manager container image for `checks.enrollment`. See

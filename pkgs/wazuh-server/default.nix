@@ -3,7 +3,7 @@
 let
   common = import ../common { inherit fetchFromGitHub fetchurl lib; };
   serverDependencies = import ./dependencies.nix {
-    inherit fetchurl stdenv;
+    inherit fetchurl lib stdenv;
     inherit (common) dependencyVersion;
   };
   agent = callPackage ../wazuh-agent { };

@@ -9,6 +9,7 @@
 #   ./prefetch-external-dependencies.sh                 # uses DEPS_VERSION below
 #   DEPS_VERSION=54 ./prefetch-external-dependencies.sh
 #   DEPS_VERSION=54 EXTRA_DEPS="flatbuffers jemalloc" ./prefetch-external-dependencies.sh
+#   DEPS_VERSION=55 DEPS_LIST="cJSON curl zlib" ./prefetch-external-dependencies.sh
 #
 # The script writes external_dependencies.nix next to itself. It also prints the
 # hashes for wazuh-http-request and modern.bpf.c, which pkgs/common/default.nix
@@ -65,6 +66,12 @@ EXTERNAL_DEPS=(
 	sqlite
 	zlib
 )
+
+# DEPS_LIST replaces the list above. scripts/upgrade-wazuh.sh sets it from
+# the EXTERNAL_RES line in src/Makefile of the target tag.
+if [ -n "${DEPS_LIST:-}" ]; then
+	read -r -a EXTERNAL_DEPS <<<"${DEPS_LIST}"
+fi
 
 read -r -a extra <<<"${EXTRA_DEPS:-}"
 if [ "${#extra[@]}" -gt 0 ]; then
