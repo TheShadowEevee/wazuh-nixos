@@ -15,14 +15,14 @@ For the whole stack, see the [root README](../../README.md).
 1. Add the flake as an input.
 
    ```nix
-   inputs.wazuh-agent.url = "git+https://github.com/nealfennimore/wazuh-nixos";
+   inputs.wazuh.url = "git+https://github.com/nealfennimore/wazuh-nixos";
    ```
 
 2. Import the module and set the manager address.
 
    ```nix
    {
-     imports = [inputs.wazuh-agent.nixosModules.wazuh-agent];
+     imports = [inputs.wazuh.nixosModules.wazuh-agent];
 
      services.wazuh-agent = {
        enable = true;

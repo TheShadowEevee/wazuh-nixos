@@ -68,14 +68,14 @@ Each module supplies its own package. The overlay is optional.
 1. Add the flake as an input.
 
    ```nix
-   inputs.wazuh-agent.url = "git+https://github.com/nealfennimore/wazuh-nixos";
+   inputs.wazuh.url = "git+https://github.com/nealfennimore/wazuh-nixos";
    ```
 
 2. Import the module for the role of the host.
 
    ```nix
    {
-     imports = [ inputs.wazuh-agent.nixosModules.wazuh-server ];
+     imports = [ inputs.wazuh.nixosModules.wazuh-server ];
    }
    ```
 

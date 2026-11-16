@@ -23,7 +23,7 @@ then import the server module and set the secrets.
 
 ```nix
 {
-  imports = [ inputs.wazuh-agent.nixosModules.wazuh-server ];
+  imports = [ inputs.wazuh.nixosModules.wazuh-server ];
   services.wazuh-server = {
     enable = true;
     openFirewall = true;

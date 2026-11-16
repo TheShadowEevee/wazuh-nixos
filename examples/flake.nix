@@ -5,13 +5,13 @@
 {
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    wazuh-agent.url = "git+https://github.com/nealfennimore/wazuh-nixos";
+    wazuh.url = "git+https://github.com/nealfennimore/wazuh-nixos";
   };
 
   outputs =
     {
       nixpkgs,
-      wazuh-agent,
+      wazuh,
       ...
     }:
     {
@@ -19,7 +19,7 @@
         system = "x86_64-linux";
         modules = [
           # The module carries its own package. The overlay is not required.
-          wazuh-agent.nixosModules.wazuh-agent
+          wazuh.nixosModules.wazuh-agent
           ./configuration.nix
           ./hardware-configuration.nix
         ];
