@@ -1,7 +1,17 @@
 # Downstream Wazuh patches
 
-These patches target Wazuh 4.14.7. Each file has one reason to exist so a
+These patches target Wazuh 4.14.10. Each file has one reason to exist so a
 future version bump can test and retire it independently.
+
+## Rebase for 4.14.10
+
+Three patches changed for 4.14.10. The reason for each patch did not change.
+
+- Patch 00: 4.14.10 copies `libstdc++` to `$@.tmp`, strips the temporary file, and then moves it. The copy keeps the read-only store mode, so the strip still fails. The patch now removes the strip of `$@.tmp`.
+- Patch 05: the old patch had zero context lines, and the lock code moved 41 lines down. The patch now has three context lines.
+- Patch 06: 4.14.10 added constants after `UNKNOWN_VALUE` in `sharedDefs.h`. Only the context of that hunk changed.
+
+Patches 00 and 06 do not apply to 4.14.8.
 
 | Patch | Why it exists | Removal condition |
 |---|---|---|
