@@ -1,12 +1,11 @@
 # Every option of the four modules must appear in the documentation.
 #
-# The agent and server options are documented in README.md, the indexer and
-# dashboard options in their module READMEs. This check evaluates each module
-# the way a host does, lists its options, and fails when a leaf option name is
-# missing from its README. A container option (a submodule) counts as
-# documented when any of its children is. Option names are matched as
-# `name` in backticks, relative to the services.<module> prefix, so
-# `api.tls.key` documents services.wazuh-server.api.tls.key. The placeholder
+# Each module documents its options in its own README, nixos/<module>/README.md.
+# This check evaluates each module the way a host does, lists its options, and
+# fails when a leaf option name is missing from its README. A container option
+# (a submodule) counts as documented when any of its children is. Option names
+# are matched as `name` in backticks, relative to the services.<module> prefix,
+# so `api.tls.key` documents services.wazuh-server.api.tls.key. The placeholder
 # <name> is kept as written.
 {
   pkgs,
@@ -52,7 +51,9 @@ pkgs.runCommand "wazuh-options-documented"
     for module in $(jq -r 'keys[]' "$specPath"); do
       readme=$(jq -r --arg m "$module" '.[$m].readme' "$specPath")
       all=$(jq -r --arg m "$module" '.[$m].options[]' "$specPath")
-      for name in $all; do
+      # Read one name per line. An unquoted $all is glob-expanded, and the
+      # stdenv builder sets nullglob, so a name with a * expanded to nothing.
+      while IFS= read -r name; do
         if grep -qF -- "\`$name\`" "$readme"; then
           continue
         fi
@@ -65,7 +66,7 @@ pkgs.runCommand "wazuh-options-documented"
         fi
         echo "services.$module.$name is not documented in ${"$"}{readme##*/}"
         status=1
-      done
+      done <<< "$all"
     done
     test $status = 0
     touch "$out"
