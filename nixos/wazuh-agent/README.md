@@ -37,9 +37,12 @@ For the whole stack, see the [root README](../../README.md).
    sudo nixos-rebuild switch
    ```
 
-The agent enrolls once, then writes `/var/ossec/var/.agent-registered`. Delete
-that file to force a new enrollment. Older versions wrote
-`/var/ossec/.agent-registered`, and an existing marker there still counts.
+The agent enrolls once, then writes `/var/ossec/var/.agent-registered`. Older
+versions wrote `/var/ossec/.agent-registered`, and an existing marker there
+still counts. If `/var/ossec/etc/client.keys` already has a key, the unit
+writes the marker and does not enroll again. This occurs when `wazuh-agentd`
+enrolls first. To force a new enrollment, delete the marker and the key file.
+The troubleshooting section shows the commands.
 
 [`examples/`](../../examples) holds a complete flake and a commented host configuration.
 
