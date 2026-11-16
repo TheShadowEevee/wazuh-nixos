@@ -5,12 +5,8 @@ search and to one or more existing Wazuh manager APIs for management data. This
 module does not create those services or their accounts. Configure the indexer
 first using the [indexer guide](../wazuh-indexer/README.md).
 
-This guide describes `integration/server-stack` at `ff6dae8`, Wazuh 4.14.8.
-The module and package are exported there, with verified release hashes. The
-shared fast checks have reported passing results; dashboard package and VM
-execution were still pending in the project thread when this guide was written.
-The native manager module is not implemented at that revision; use an existing
-reachable manager API, not an assumed `nixosModules.wazuh-server` export.
+For the manager API, use the [server guide](../wazuh-server/README.md) or another
+reachable Wazuh manager. The [root README](../../README.md) shows the whole stack.
 
 ## Add the module to a host
 
@@ -228,9 +224,10 @@ plus the fixture VM and host overhead, and a working NixOS VM-test/KVM environme
 
 The VM test checks HTTPS status, restart, credential access, the stored manager
 connection through the running dashboard, and the packaged API client's behavior
-with correct, wrong and absent additional CA trust. This does not establish
-native manager integration or end-to-end agent event delivery. Those require the
-separate stack work. Use the native system attribute for another supported
+with correct, wrong and absent additional CA trust. It does not use the native
+manager. `checks.dashboard-server` runs the dashboard against
+`services.wazuh-server`, and `checks.stack` adds an agent and end-to-end event
+delivery. Use the native system attribute for another supported
 architecture and verify its package and VM support separately.
 
 ## Design and implementation notes

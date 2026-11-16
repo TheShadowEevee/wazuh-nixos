@@ -118,8 +118,8 @@
             wazuh-dashboard = import ./nixos/wazuh-dashboard;
           };
           readmes = {
-            wazuh-agent = ./README.md;
-            wazuh-server = ./README.md;
+            wazuh-agent = ./nixos/wazuh-agent/README.md;
+            wazuh-server = ./nixos/wazuh-server/README.md;
             wazuh-indexer = ./nixos/wazuh-indexer/README.md;
             wazuh-dashboard = ./nixos/wazuh-dashboard/README.md;
           };

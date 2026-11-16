@@ -5,10 +5,9 @@ initializes its security configuration. It does not start a manager, ship alerts
 or start a dashboard. Configure those separately; see the
 [dashboard guide](../wazuh-dashboard/README.md).
 
-This guide describes `integration/server-stack` at `ff6dae8`, Wazuh 4.14.8.
-Release hashes and flake exports are present at that revision. The indexer package
-and the two fast checks have build evidence reported in the project thread;
-the indexer VM test and production deployment have not yet been verified there.
+The [server guide](../wazuh-server/README.md) connects the manager to the
+indexer with `services.wazuh-server.indexer`. The [root README](../../README.md)
+shows the whole stack.
 
 ## Add the module to a host
 

@@ -1,24 +1,69 @@
-# wazuh-agent
+# Wazuh on NixOS
 
-A Nix flake that packages the Wazuh agent and runs it on NixOS.
+A Nix flake that packages the Wazuh security platform and runs each of its
+components as a NixOS module. The flake holds the agent, the manager and its
+API, the indexer, the dashboard, and the filebeat build that ships alerts.
 
-The flake targets Wazuh 4.14.7 with external dependency set `DEPS_VERSION=54`.
-It supports `x86_64-linux` and `aarch64-linux`.
+The flake targets Wazuh 4.14.8 with external dependency set `DEPS_VERSION=54`.
+The packages evaluate for `x86_64-linux` and `aarch64-linux`. CI builds the
+agent for both systems and the server stack for `x86_64-linux` only.
 
-## Contents
+## Components
+
+Each NixOS module has its own guide. The guide gives the setup steps, every
+option of the module, the troubleshooting steps and the checks.
+
+| Component | Module | Guide | Purpose |
+|-----------|--------|-------|---------|
+| Agent | `services.wazuh-agent` | [nixos/wazuh-agent/README.md](nixos/wazuh-agent/README.md) | Collects logs, file changes, the package inventory and scan results on a host. |
+| Server | `services.wazuh-server` | [nixos/wazuh-server/README.md](nixos/wazuh-server/README.md) | The manager: enrolls agents, analyzes their events, writes alerts and runs the Wazuh API. Ships alerts to the indexer with filebeat. |
+| Indexer | `services.wazuh-indexer` | [nixos/wazuh-indexer/README.md](nixos/wazuh-indexer/README.md) | Stores and searches alerts and inventory data. |
+| Dashboard | `services.wazuh-dashboard` | [nixos/wazuh-dashboard/README.md](nixos/wazuh-dashboard/README.md) | The browser UI. Reads the indexer and the server API. |
+
+The data flows in this order:
+
+1. The agent enrolls with the server on port 1515.
+2. The agent sends its events to the server on port 1514.
+3. The server writes alerts, and `wazuh-filebeat` sends them to the indexer on port 9200.
+4. The dashboard reads the indexer on port 9200 and the server API on port 55000.
+5. Users open the dashboard on port 5601.
+
+The agent module and the server module cannot share a host. Both own
+`/var/ossec` and the `wazuh` account. The manager monitors its own host.
+
+Other documents:
+
+- [pkgs/wazuh-server/README.md](pkgs/wazuh-server/README.md): how the manager and API package is built.
+- [pkgs/common/README.md](pkgs/common/README.md): the source and the inputs that the agent and server packages share.
+- [pkgs/patches/README.md](pkgs/patches/README.md): the downstream patches and the reason for each.
+- [docs/implementation-status.md](docs/implementation-status.md): the agent configuration sections that the agent module covers.
+- [docs/manager-reference.md](docs/manager-reference.md): the manager reference sections and the server option that covers each one.
+- [examples/](examples): a consumer flake, an agent host, and server configurations.
+
+## Flake outputs
 
 | Output | Purpose |
 |--------|---------|
-| `packages.wazuh-agent` | The agent build. `wazuh-control` is the main program. |
-| `nixosModules.wazuh-agent` | The `services.wazuh-agent` NixOS module. |
+| `nixosModules.wazuh-agent` | The `services.wazuh-agent` module. `nixosModules.default` is the same module. |
+| `nixosModules.wazuh-server` | The `services.wazuh-server` module. |
+| `nixosModules.wazuh-indexer` | The `services.wazuh-indexer` module. |
+| `nixosModules.wazuh-dashboard` | The `services.wazuh-dashboard` module. |
+| `packages.wazuh-agent` | The agent build. `wazuh-control` is the main program. `packages.default` is the same package. |
 | `packages.wazuh-server` | The server build: manager daemons, API and bundled CPython. |
-| `nixosModules.wazuh-server` | The `services.wazuh-server` NixOS module. See [Run the server](#run-the-server). |
+| `packages.wazuh-indexer` | The indexer, from the upstream release package. |
+| `packages.wazuh-dashboard` | The dashboard, from the upstream release package. |
+| `packages.filebeat-oss` | filebeat OSS 7.10.2, the alert shipper that the upstream server package installs. |
+| `packages.wazuh-testing` | The upstream integration test framework, for `checks.integration`. |
+| `packages.vm` | A QEMU VM with the agent enabled. |
+| `nixosConfigurations.wazuh-agent-vm` | The same VM, for `nixos-rebuild build-vm`. |
 | `overlays.default` | Adds `wazuh-agent` to a package set. |
+| `checks.*` | The checks in [Run the checks](#run-the-checks). |
 | `devShells.default` | A shell for work on this repository. |
+| `formatter` | `nixfmt`. |
 
-The NixOS module supplies its own package. The overlay is optional.
+Each module supplies its own package. The overlay is optional.
 
-## Add the agent to a NixOS host
+## Add the flake to a host
 
 1. Add the flake as an input.
 
@@ -26,986 +71,82 @@ The NixOS module supplies its own package. The overlay is optional.
    inputs.wazuh-agent.url = "git+https://github.com/nealfennimore/wazuh-nixos";
    ```
 
-2. Import the module and set the manager address.
+2. Import the module for the role of the host.
 
    ```nix
    {
-     imports = [inputs.wazuh-agent.nixosModules.wazuh-agent];
-
-     services.wazuh-agent = {
-       enable = true;
-       manager.host = "192.168.1.2";
-     };
+     imports = [ inputs.wazuh-agent.nixosModules.wazuh-server ];
    }
    ```
 
-3. Rebuild the host.
+3. Set the options from the guide of that module.
+4. Rebuild the host.
 
    ```bash
    sudo nixos-rebuild switch
    ```
 
-The agent enrolls once, then writes `/var/ossec/var/.agent-registered`. Delete
-that file to force a new enrollment. Older versions wrote
-`/var/ossec/.agent-registered`, and an existing marker there still counts.
+The input name `wazuh-agent` is the name that the guides and `examples/` use.
+Any input name works.
 
-`examples/` holds a complete flake and a commented host configuration.
+## Deploy the full stack
 
-## Verify the service
+Each component connects to a component above it in this list. Deploy them in
+this order:
 
-1. Confirm that the five daemons are active.
+1. The indexer. Prepare its certificates and user hashes, then start it. See
+   the [indexer guide](nixos/wazuh-indexer/README.md).
+2. The server. Set `services.wazuh-server.indexer` to the indexer URL, the CA
+   and a client certificate. See
+   [Ship alerts to an indexer](nixos/wazuh-server/README.md#ship-alerts-to-an-indexer).
+3. The dashboard. Point `indexer` at the indexer and `managers` at the server
+   API. See the [dashboard guide](nixos/wazuh-dashboard/README.md).
+4. The agents. Point `manager.host` at the server. See the
+   [agent guide](nixos/wazuh-agent/README.md).
 
-   ```bash
-   systemctl status wazuh.target wazuh-agentd wazuh-logcollector \
-     wazuh-syscheckd wazuh-modulesd wazuh-execd
-   ```
+The checks use one certificate authority for the whole stack. The indexer, the
+server API, `authd` and the dashboard each present a certificate from it, and
+each client verifies its peer with the same CA file. Keep every private key,
+password and hash outside the Nix store. Each module reads them from runtime
+paths through systemd `LoadCredential`.
 
-2. Read the enrollment result.
+`checks.stack` deploys the four components in this order on four VMs. Its
+configuration in `nixos/tests/stack` is a working example of the wiring.
 
-   ```bash
-   journalctl -u wazuh-agent-auth -b
-   ```
+## Run the checks
 
-3. Confirm that the generated configuration reached the state directory.
-
-   ```bash
-   grep -A2 '<server>' /var/ossec/etc/ossec.conf
-   ```
-
-4. Read the agent log.
-
-   ```bash
-   tail -n 50 /var/ossec/logs/ossec.log
-   ```
-
-The manager must list the agent as `Active`. Run `agent_control -l` on the
-manager to confirm this.
-
-## Enrollment fails
-
-Enrollment uses two different ports. `agent-auth` talks to `authd` on the
-registration port, 1515 by default. The daemons then send agent data to
-`remoted` on the manager port, 1514 by default.
-
-A wrong enrollment port gives this error:
-
-```
-agent-auth: ERROR: SSL error (1). Connection refused by the manager.
-SSL routines::unexpected eof while reading
-```
-
-That message means that the manager accepted the connection and then closed
-it. Confirm that `authd` runs, and that `services.wazuh-agent.registration.port`
-matches the port that `authd` listens on.
-
-To enroll again after a failure, delete the marker file and restart the unit.
+Each check is a flake output. Build it with `nix build`:
 
 ```bash
-sudo rm -f /var/ossec/var/.agent-registered /var/ossec/.agent-registered \
-  /var/ossec/etc/client.keys
-sudo systemctl restart wazuh-agent-auth
-sudo systemctl restart wazuh.target
+nix build .#checks.x86_64-linux.<name>
 ```
 
-## Options
-
-The tables in this README and in the indexer and dashboard READMEs list
-every option of the four modules. `checks.options-documented` evaluates the
-modules and fails when an option is missing from its table.
-
-| Option | Default | Purpose |
-|--------|---------|---------|
-| `enable` | `false` | Runs the agent daemons. |
-| `package` | this flake | The agent package. |
-| `manager.host` | none | The address of the Wazuh manager. Required. |
-| `manager.port` | `1514` | The agent traffic port on the manager. |
-| `registration.host` | `null` | A separate enrollment server. `null` means the manager. |
-| `registration.port` | `1515` | The enrollment port. Used even when `registration.host` is `null`. |
-| `registration.caFile` | `null` | CA that the manager is verified against. `null` means no verification. |
-| `registration.certFile` | `null` | Client certificate this agent presents. Needs `keyFile` and `caFile`. |
-| `registration.keyFile` | `null` | Private key for `certFile`. Keep it outside the store. |
-| `registration.agentName` | `null` | The name the agent enrolls under. `null` means the hostname. |
-| `registration.groups` | `[ ]` | Groups joined at enrollment. Each must already exist on the manager. |
-| `agentAuthPasswordFile` | `null` | A file that holds the enrollment password. |
-| `syscheck.directories` | `[ "/etc" "/boot" ]` | Directories that file integrity monitoring watches. |
-| `syscheck.ignore` | the two systemd credential stores | Paths excluded from monitoring. |
-| `sca.enable` | `true` | Runs Security Configuration Assessment scans. |
-| `sca.scanOnStart` | `true` | Scans when the agent starts. |
-| `sca.interval` | `"12h"` | Time between scans. |
-| `sca.skipNfs` | `true` | Skips NFS mounts during a scan. |
-| `buffer.enable` | `true` | Buffers events between the collectors and the manager link. |
-| `buffer.queueSize` | `5000` | How many events the queue holds. The range is 1 to 100000. |
-| `buffer.eventsPerSecond` | `500` | The send rate out of the queue. The range is 1 to 1000. |
-| `labels` | `{ }` | Labels that the manager adds to every alert from this host. |
-| `labels.<name>.value` | none | The label value. The plain string form of a label sets this. |
-| `labels.<name>.hidden` | `false` | Omit the label from alert output. The manager still receives it. |
-| `logging.plain` | `true` | Writes the agent's own log as text, to `logs/ossec.log`. |
-| `logging.json` | `false` | Writes the agent's own log as JSON, to `logs/ossec.json`. |
-| `packageInventory.enable` | `config.nix.enable` | Lists the Nix packages of the running system for vulnerability detection. |
-| `packageInventory.interval` | `"daily"` | The scheduled refresh of that list. Each registered generation refreshes it too. |
-| `packageInventory.cpe.packages` | `[ ]` | Derivations whose `meta.identifiers` feed the CPE map, besides `environment.systemPackages` and the kernel. |
-| `packageInventory.cpe.attrNames` | deep-closure list | Attribute paths in `pkgs` whose `meta.identifiers` feed the CPE map. |
-| `packageInventory.cpe.fallbacks` | hand-checked list | CPEs for pnames that nixpkgs has not annotated. Used only where nixpkgs says nothing. |
-| `packageInventory.cpe.overrides` | `{ }` | The host's final word on a pname's CPE vendor and product. |
-| `packageInventory.cpe.fallbacks.<name>.vendor` | none | The CPE vendor for that pname, lower case. |
-| `packageInventory.cpe.fallbacks.<name>.product` | the pname | The CPE product for that pname, lower case. |
-| `packageInventory.cpe.overrides.<name>.vendor` | none | The CPE vendor the host asserts for that pname. |
-| `packageInventory.cpe.overrides.<name>.product` | the pname | The CPE product the host asserts for that pname. |
-| `activeResponse.enable` | `false` | Lets the agent act on a finding, not only report it. |
-| `activeResponse.capability.firewall-drop.enable` | `true` | Add the offending address to the iptables DROP list. Grants `CAP_NET_ADMIN`. |
-| `activeResponse.capability.route-null.enable` | `true` | Route the offending address to nowhere. Grants `CAP_NET_ADMIN`. |
-| `activeResponse.capability.wazuh-slack.enable` | `true` | Post a notification to a Slack webhook with `curl`. No capability. |
-| `activeResponse.capability.host-deny.enable` | `false` | Append the offending address to `/etc/hosts.deny`. Needs that file writable by `wazuh`. |
-| `activeResponse.capability.firewalld-drop.enable` | `services.firewalld.enable` | Add the offending address to the firewalld drop list through a polkit rule. |
-| `activeResponse.capability.disable-account.enable` | `false` | Lock the offending account with `passwd -l`. Runs `wazuh-execd` as root. |
-| `extraConfig` | `""` | XML appended to the generated `ossec.conf`. |
-| `config` | `null` | The complete `ossec.conf`. Replaces the generated file. |
-| `path` | see module | Packages on the PATH of the daemons. |
-
-Do not put the enrollment password in the Nix store. The store is world
-readable. Point `agentAuthPasswordFile` at a path outside the store. Root-only
-sources created by sops-nix, agenix, or another secret manager are supported;
-systemd reads the source and delivers it to the setup service as a credential.
-
-`config` and `extraConfig` conflict. An assertion rejects both together.
-
-Not every upstream configuration section has an option here.
-[docs/implementation-status.md](docs/implementation-status.md) records which
-sections the module covers and which work remains.
-
-### Configuration assessment
-
-The `ossec-agent.conf` that ships in the package has no `<sca>` block.
-Upstream writes that block into the `ossec.conf` that `install.sh` generates,
-from `etc/templates/config/generic/sca.template`. This module builds from
-`ossec-agent.conf` instead, so Security Configuration Assessment never ran.
-This module appends the block itself.
-
-SCA replaces the deprecated rootcheck `system_audit` check. That deprecation
-is the warning `wazuh-syscheckd` logs on every start:
-
-```
-WARNING: The check_unixaudit option is deprecated in favor of the SCA module.
-```
-
-Keep the `<system_audit>` entries. The manager pushes those policy files into
-`etc/shared`, and rootcheck reads them. The warning names a replacement, not a
-fault.
-
-Policies come from the package at `ruleset/sca`. Upstream installs the set
-that matches the distribution and falls back to
-`sca_distro_independent_linux.yml`, which is what NixOS gets. The module links
-that package directory into `/var/ossec`.
-
-### The agent event buffer
-
-Upstream configures this block as `client_buffer`. Events queue in the
-buffer between the collectors and the connection to the manager, so the
-agent absorbs bursts and survives a slow or absent manager. When the queue
-fills, the agent drops new events and tells the manager about the loss.
-
-Raise `buffer.queueSize` on hosts with bursty logs or a manager behind an
-unreliable link. Raise `buffer.eventsPerSecond` when the queue drains too
-slowly after a burst. `wazuh-agentd` rejects values outside the documented
-ranges and refuses to start, so the option types carry the same bounds and a
-bad value fails at evaluation instead.
-
-```nix
-services.wazuh-agent.buffer = {
-  queueSize = 20000;
-  eventsPerSecond = 250;
-};
-```
-
-Set `buffer.enable = false` to send every event directly. That removes the
-flood protection.
-
-### Labels
-
-Labels are key-value tags that the agent reports with its events. The
-manager adds them to every alert from this host, so rules, searches and
-dashboards can select agents by environment, role, or any other tag.
-
-```nix
-services.wazuh-agent.labels = {
-  environment = "production";
-  rack = { value = "row 4"; hidden = true; };
-};
-```
-
-A plain string is a visible label. The submodule form adds `hidden`: the
-manager still receives a hidden label, and omits it from alert output
-unless it is configured to show them.
-
-Keys and values go into `ossec.conf` verbatim. The Wazuh parser does not
-decode XML entities, so a raw `&` is correct and `&amp;` reaches the
-manager as five literal characters. Assertions reject what the parser
-cannot carry: `"`, `<`, or `>` in a key, and in a value `<` or a
-trailing backslash. Keys must not start with `_`, which is reserved for
-internal use. An assertion rejects such a key, because the agent skips
-it at runtime with only a warning.
-
-### The agent's own log
-
-`logging.plain` and `logging.json` select the format of the log that the
-daemons write about themselves. Plain text goes to `logs/ossec.log` and
-JSON goes to `logs/ossec.json`. Both can be on at once. At least one must
-be on, and an assertion enforces that, because the daemons treat an empty
-format as plain and hide the mistake.
-
-This log also reaches journald, because the daemons run in the foreground
-under systemd. Turn on `logging.json` when a collector reads the file
-directly and wants structured records.
-
-### Vulnerability detection
-
-The manager detects vulnerabilities from the package inventory that the
-agent sends. Upstream syscollector reads that inventory from the dpkg, rpm,
-pacman, apk and snap databases. NixOS has none of them, so a stock agent
-sends an empty inventory and the manager scans nothing. The manager also
-has no entry for the `nixos` platform, so it skips the operating system
-scan, and only says so at debug level 1.
-
-This module closes the package half. The `wazuh-nix-inventory` unit lists
-the runtime closure of the activated system:
-
-```bash
-nix-store --query --requisites /run/current-system
-```
-
-It writes the list to `/var/ossec/queue/syscollector/nix-closure`. Patch 06
-in `pkgs/patches` teaches syscollector to read that file. Each store path
-becomes one package row, named by the nixpkgs rule `pname-version`, with
-format `nix`. The manager has no `nix` format, so it falls back to a
-generic version parser and the NVD feed, which matches on package name.
-Python packages from nixpkgs are reported with format `pypi` instead, which
-routes them to the PyPI feed.
-
-#### The CPE map
-
-Every NVD entry names a vendor, and the manager rejects a candidate when
-the package carries no vendor or a different one. A store path carries
-none. Without a vendor, a `nix` row matches nothing from the NVD and only
-the `pypi` rows produce findings.
-
-So the unit also writes `/var/ossec/queue/syscollector/nix-cpe-map`, a
-JSON object from pname to CPE vendor and product, and the collector
-attaches those to each row:
-
-```json
-{"glibc":{"product":"glibc","vendor":"gnu"},"linux":{"product":"linux_kernel","vendor":"linux"}}
-```
-
-`nixos/wazuh-agent/cpe-map.nix` builds the map at evaluation time. The
-data comes from nixpkgs: since February 2026 a package can declare
-`meta.identifiers.cpeParts`, and nixpkgs derives `meta.identifiers.cpe`
-from it once a vendor is present. The map reads that attribute from every
-derivation the module can see, which is `environment.systemPackages`, the
-kernel, a list of deep-closure attribute names resolved against `pkgs`,
-and any packages the host adds. Three layers combine, later ones winning:
-
-1. `packageInventory.cpe.fallbacks`. Hand-checked CPEs for core packages
-   that nixpkgs has not annotated yet. Used only where nixpkgs says
-   nothing.
-2. `meta.identifiers` from nixpkgs. Coverage grows with each nixpkgs
-   bump, and this repository does not change for it.
-3. `packageInventory.cpe.overrides`. The host's final word.
-
-To see the map for this flake's nixpkgs, and which layer each entry came
-from:
-
-```bash
-./examples/show-cpe-map.sh
-./examples/show-cpe-map.sh glibc openssl   # raw meta.identifiers
-```
-
-A service package is in the closure but not in `environment.systemPackages`.
-Add it to `packageInventory.cpe.packages` so its metadata is read:
-
-```nix
-services.wazuh-agent.packageInventory.cpe.packages = [ config.services.nginx.package ];
-```
-
-A package absent from the map keeps a blank vendor and matches nothing from
-the NVD. That is the behavior before the map existed, so an incomplete map
-adds findings without adding false positives.
-
-The unit runs as the `wazuh` user with no network. The query is a
-conversation with the Nix daemon over its Unix socket, and the daemon
-answers from the local store database. It runs once before
-`wazuh-modulesd` starts, again after every generation that `nixos-rebuild
-switch` or `boot` registers, through a path unit
-on `/nix/var/nix/profiles`, and on the `packageInventory.interval`
-schedule. `nixos-rebuild test` registers no generation, so only the
-schedule covers it.
-
-To check the result on the agent:
-
-```bash
-sudo sqlite3 /var/ossec/queue/syscollector/db/local.db \
-  "select name, version, format, vendor from dbsync_packages where source = 'nixpkgs' limit 20"
-```
-
-A row with a blank vendor and format `nix` cannot match the NVD. Add the
-package to the map through `packageInventory.cpe.overrides`, or to the
-nixpkgs package as `meta.identifiers.cpeParts`.
-
-To check the result on the manager, raise `wazuh_modules.debug` to 2 in
-`local_internal_options.conf` and read `ossec.log` for the agent's scan
-lines. They name each candidate and the reason it was accepted or
-rejected.
-
-Four limits remain:
-
-- A package that no layer of the CPE map names has no vendor and matches
-  nothing from the NVD. `examples/show-cpe-map.sh` lists those under
-  `unresolved`.
-- The manager compares the vendor literally. A product that the NVD has
-  filed under two vendors over time, as `haxx:curl` and `curl:curl`,
-  matches only the one the map names.
-- nixpkgs applies many fixes as patches without a version bump. Those
-  show as open findings. The same is true of every scanner that reads
-  only name and version.
-- There is no operating system entry. NixOS itself has no advisory feed
-  that the manager reads.
-
-### Active response
-
-Active response is off by default. That is what the sandbox already enforced
-before the option existed: the template ships active response enabled, but
-`wazuh-execd` runs as the `wazuh` user with no capabilities, and the response
-that matters, `firewall-drop`, execs `iptables` to add `INPUT` and `FORWARD`
-`DROP` rules. So the agent detected and could not respond, and nothing said
-so.
-
-With the option off, `ossec.conf` carries `<disabled>yes</disabled>` and no
-`wazuh-execd` unit is defined. `execd` with active response disabled logs
-`Active response disabled` and returns 0, so a unit for it would report
-inactive forever.
-
-```nix
-services.wazuh-agent.activeResponse.enable = true;
-```
-
-Each response is granted what it needs, and nothing more.
-
-```nix
-services.wazuh-agent.activeResponse = {
-  enable = true;
-  capability.host-deny.enable = true;
-  capability.route-null.enable = false;
-};
-```
-
-| Response | Needs | Default |
-|----------|-------|---------|
-| `firewall-drop` | `iptables` and `ip6tables`, `CAP_NET_ADMIN` | on |
-| `route-null` | `route` from `nettools`, `CAP_NET_ADMIN` | on |
-| `wazuh-slack` | `curl`, no capability | on |
-| `host-deny` | `/etc/hosts.deny` writable by the `wazuh` user | off |
-| `firewalld-drop` | `firewall-cmd`, and a polkit rule | follows `services.firewalld.enable` |
-| `disable-account` | `wazuh-execd` running as **root** | off |
-
-`host-deny` is off by default because the grant is a different shape. The path
-is hardcoded, `ProtectSystem = "strict"` makes `/etc` read-only, and the file
-is normally owned by root. Enabling it adds `/etc/hosts.deny` to
-`ReadWritePaths` for `wazuh-execd` alone and creates the file owned by the
-`wazuh` user. Little reads that file on a modern NixOS host, so enable it only
-if something on yours does.
-
-`firewalld-drop` follows `services.firewalld.enable`, so it needs no attention
-when firewalld is on or off. The binary comes with the firewalld package
-already. What it adds is a polkit rule letting the `wazuh` user call
-`org.fedoraproject.FirewallD1.all`. That action id is every runtime change
-firewalld accepts, because firewalld does not split runtime authorization more
-finely. Permanent changes are a separate action and stay denied.
-
-`disable-account` runs `wazuh-execd` as **root**, and no capability
-substitutes. `shadow` reads the real UID (`passwd.c:71,767`), so neither a
-capability nor a setuid wrapper reaches it. The module warns at evaluation when
-this is on, because `wazuh-execd` is the unit that runs what the manager tells
-it to run: a compromised or impersonated manager reaches root through it. Set
-`registration.caFile` if you enable this. The group stays `wazuh` so that
-`logs/active-responses.log` remains readable by `wazuh-logcollector`, which is
-how the manager learns a response ran.
-
-Apart from `disable-account`, `CAP_NET_ADMIN` is the only capability any unit
-in this module holds, and only `wazuh-execd` holds it. Turn off
-`firewall-drop` and `route-null` and no unit holds a capability at all.
-
-**These options do not restrict the manager.** Every script the package ships
-stays in `active-response/bin`, and the manager decides which to invoke. They
-control whether the binary and the privilege that script needs are present. A
-response the manager sends that is disabled here fails.
-
-Each script resolves its binary with a `PATH` lookup, and a miss is written to
-`logs/active-responses.log` rather than to the journal. `logcollector` reads
-that file, so the manager sees it. The agent's own journal does not.
-
-Four are not offered, and none of the four is a capability question.
-
-| Script | Why not |
-|--------|---------|
-| `disable-account` | Runs `passwd -l`. `shadow` takes `amroot` from the **real** UID (`passwd.c:71,767`) and refuses the flag when it is not 0 (`passwd.c:972`). A setuid wrapper changes the effective UID, so it does not help. This needs `wazuh-execd` to run as root. |
-| `firewalld-drop` | Needs `firewalld` running and reachable over D-Bus. A host decision, not a grant. |
-| `restart-wazuh`, `restart.sh` | Restart through `wazuh-control`, which starts daemons outside the supervision systemd already provides. |
-| `ipfw`, `npf`, `pf`, `kaspersky` | BSD firewalls, and a vendor CLI that is not packaged here. |
-
-### Verify the manager during enrollment
-
-Enrollment does not verify the manager unless a CA is configured. Without one
-the client context keeps the OpenSSL default, `SSL_VERIFY_NONE`, so the
-handshake completes against any certificate. The agent records this at
-`mdebug1`, which does not print at the default log level.
-
-```nix
-services.wazuh-agent.registration.caFile = "/var/lib/wazuh-certs/root-ca.pem";
-```
-
-This covers both enrollment paths, which matters because there are two. The
-`agent-auth` unit runs once and gets `-v`. `wazuh-agentd` enrolls itself from
-the `<enrollment>` block on every boot and gets `server_ca_path`. Configuring
-one and not the other leaves the path that runs more often unverified.
-
-Verification checks the chain, then matches the subject alternative names, and
-failing that the common name, against the address the agent connects to. So
-the manager's certificate must name `manager.host`, or `registration.host`
-when that is set. A manager using the certificate it generates for itself does
-not pass. That is a manager-side change, not an agent one.
-
-`registration.certFile` and `registration.keyFile` add a client certificate.
-Set them together, and set `caFile` as well: a client certificate proves the
-agent to the manager and does not make the agent check the manager. An
-assertion rejects both mistakes. The manager verifies a client certificate
-only when its own `ssl_agent_ca` is set.
-
-Put the key outside the Nix store. Nothing copies these files, so their own
-permissions are what matter, and the `wazuh` user must be able to read them.
-
-### File integrity monitoring on NixOS
-
-Upstream watches `/etc`, `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin` and `/boot`.
-NixOS has no `/sbin` and no `/usr/sbin`, and `/bin` and `/usr/bin` hold one
-symlink each, `sh` and `env`. Four of those six entries monitor nothing, so the
-default drops them.
-
-Nothing is lost. Every binary on NixOS lives in `/nix/store` under a path that
-is a hash of its own contents, which is a stronger guarantee than a periodic
-checksum. Watch the mutable surface instead:
-
-```nix
-services.wazuh-agent.syscheck.directories = [
-  "/etc"
-  "/boot"
-  "/root"
-  "/home"
-];
-```
-
-Do not add `/nix/store`. It is immutable and large enough to make a checksum
-scan expensive for no gain. Add `/run/current-system/sw/bin` only if you want
-every system rebuild reported as several hundred changes.
-
-## Run the server
-
-`nixosModules.wazuh-server` runs the manager daemons and the API on one host.
-It owns `/var/ossec` and the `wazuh` account, so it cannot share a host with
-`services.wazuh-agent`. The manager monitors itself.
-
-```nix
-{
-  imports = [ inputs.wazuh-agent.nixosModules.wazuh-server ];
-  services.wazuh-server = {
-    enable = true;
-    openFirewall = true;
-    auth.passwordFile = "/run/secrets/wazuh-authd-pass";
-    api.tls = {
-      certificate = "/run/secrets/wazuh-api.crt";
-      key = "/run/secrets/wazuh-api.key";
-    };
-  };
-}
-```
-
-The module writes `ossec.conf` and `api.yaml` from its options. `extraConfig`
-appends XML inside `<ossec_config>`. Without `api.tls`, the API generates a
-self-signed pair on first start. Without `auth.tls`, the enrollment service
-generates one self-signed pair and keeps it.
-
-The API starts with the upstream default users `wazuh` and `wazuh-wui`, and
-the default password of each user is its name. `api.users.<name>.passwordFile`
-replaces that password with the content of a file.
-
-```nix
-services.wazuh-server.api.users = {
-  wazuh.passwordFile = "/run/secrets/wazuh-api-wazuh";
-  wazuh-wui.passwordFile = "/run/secrets/wazuh-api-wui";
-};
-```
-
-PID 1 reads the files through `LoadCredential`, so they can belong to root.
-The API requires 8 to 64 characters with an upper-case letter, a lower-case
-letter, a digit and a symbol. The unit `wazuh-api-users.service` runs after
-`wazuh-apid.service`. It waits for the API, then it tries each user's
-configured password. If the configured password authenticates, the unit
-changes nothing. Otherwise it authenticates with the previous password and
-sets the new password through `PUT /security/users/{id}`. If neither
-password authenticates, the unit fails and names the user. Put the current
-password in `defaultPasswordFile`, or reset the password through the API. Without
-`api.users`, the upstream defaults stay.
-
-The previous password is the upstream default, the user name, unless
-`api.users.<name>.defaultPasswordFile` names a file. PID 1 reads that file
-through `LoadCredential` too. No password is an argument of a process that
-the unit starts, because every local user can read `/proc/<pid>/cmdline`.
-
-When `wazuh-api-users.service` fails, `wazuh-apid-guard.service` starts. The
-guard waits for the API and authenticates each configured user with the
-upstream default password. If one of them authenticates, the guard stops
-`wazuh-apid.service` and fails, so `systemctl --failed` shows the condition.
-A host whose first provisioning failed then has no listening API. If no
-default authenticates, the guard leaves the API up. To recover, fix the
-password files and restart `wazuh-api-users.service`. The restart starts
-the API again.
-
-With `api.tls` set, the unit verifies the API certificate and connects to
-`api.serverName`, which defaults to the host name. The host name must be a
-name in the certificate. Without `api.tls`, the unit connects to `127.0.0.1`
-with certificate verification off, because the self-signed pair that the API
-generates carries no usable name. The password then still travels encrypted,
-but the peer is not authenticated.
-
-`activeResponse.enable` defaults to `true`, as upstream. The module runs
-`wazuh-execd` as `wazuh` with no capability and writes the upstream default
-`<command>` definitions to `ossec.conf`, except `restart-wazuh`, whose program
-the package removes. No `<active-response>` block is written, so no response
-runs on the manager until `extraConfig` adds one. The stock response programs
-need more than the unit grants: `firewall-drop` and `route-null` need
-`CAP_NET_ADMIN`, `host-deny` writes `/etc/hosts.deny`, and `disable-account`
-needs root. Grant those to the unit before you bind such a response to the
-manager. `false` removes the unit and writes
-`<active-response><disabled>yes</disabled></active-response>`.
-
-Four daemons chroot into `/var/ossec` as upstream does: analysisd, remoted,
-monitord and wazuh-db. Their units carry `CAP_SYS_CHROOT` and nothing else.
-The other units carry no capability. Each daemon runs as `wazuh` with
-`ProtectSystem=strict` and a writable bind on its state directories only.
-
-```sh
-nix build .#checks.x86_64-linux.server
-```
-
-The check boots one VM, waits for every unit, confirms the four chroots and
-the ports, loads the ruleset with `wazuh-analysisd -t`, confirms that
-`wazuh-api-users.service` replaced the default passwords, that no password was
-a process argument (kernel audit), that `defaultPasswordFile` works, that the
-guard stops a fresh API whose provisioning failed, and authenticates
-against the API with the test PKI. The cluster is not part of the module
-yet.
-
-`listenIPv6` (default `true`) binds remoted and authd to a dual-stack socket.
-An agent that names the manager by hostname can resolve an IPv6 address first.
-With the upstream IPv4-only binding that agent cannot connect.
-
-### Server options
-
-Every option lives under `services.wazuh-server`. Paths point outside the Nix
-store unless the row says otherwise. PID 1 reads each `*File` option through
-`LoadCredential`, so those files can be root-only.
-
-| Option | Default | Purpose |
-|--------|---------|---------|
-| `enable` | `false` | Runs the manager daemons and the API. |
-| `package` | `pkgs.wazuh-server` | The server package. |
-| `openFirewall` | `false` | Opens the agent, enrollment and API ports in the firewall. |
-| `remote.port` | `1514` | The TCP port of the default secure listener. Set `remote.port` or `remote.listeners`, not both. |
-| `remote.listeners` | one secure TCP listener on `remote.port` | The `remoted` listeners, one `<remote>` block each. At most one listener can be secure. |
-| `remote.listeners.*.connection` | none | `secure` for agents, `syslog` for syslog senders. |
-| `remote.listeners.*.port` | none | The port the listener binds. A port below 1024 gives `wazuh-remoted` `CAP_NET_BIND_SERVICE`. |
-| `remote.listeners.*.protocol` | `[ "tcp" ]` | `tcp`, `udp`, or both. Only a secure listener can use both. |
-| `remote.listeners.*.localIp` | `null` | The address the listener binds. `null` binds every address. |
-| `remote.listeners.*.ipv6` | `null` | Binds an IPv6 socket. `null` follows `listenIPv6` for a secure listener and binds IPv4 for a syslog listener. |
-| `remote.listeners.*.allowedIps` | `[ ]` | Syslog senders that `remoted` accepts, as addresses or networks. A syslog listener needs one entry at least. |
-| `remote.listeners.*.deniedIps` | `[ ]` | Syslog senders that `remoted` refuses. |
-| `remote.listeners.*.queueSize` | `null` | The message queue size of a secure listener. `null` keeps the Wazuh default. |
-| `listenIPv6` | `true` | Binds `remoted` and `authd` to a dual-stack socket. Off, both bind IPv4 only, as upstream does. |
-| `auth.enable` | `true` | Runs `wazuh-authd`, the enrollment service. |
-| `auth.port` | `1515` | The enrollment port. |
-| `auth.passwordFile` | `null` | File with the enrollment password. `null` disables password enrollment. |
-| `auth.tls` | `null` | The certificate `authd` presents. `null` generates a self-signed pair once, as the upstream installer does. |
-| `auth.tls.certificate` | none | The certificate file. |
-| `auth.tls.key` | none | Its private key. |
-| `auth.agentCa` | `null` | CA that enrolling agents must present a certificate from. `null` accepts any agent. |
-| `api.port` | `55000` | The API port (HTTPS). |
-| `api.listenAddresses` | `[ "0.0.0.0" "::" ]` | Addresses the API binds. |
-| `api.tls` | `null` | The API certificate. `null` makes the API generate a self-signed pair on first start. |
-| `api.tls.certificate` | none | The certificate file. |
-| `api.tls.key` | none | Its private key. |
-| `api.serverName` | the host name, or `127.0.0.1` without `api.tls` | The name `wazuh-api-users.service` connects to. With `api.tls` it must appear in the certificate. |
-| `api.logLevel` | `"info"` | The API log level: `debug2`, `debug`, `info`, `warning`, `error` or `critical`. |
-| `api.settings` | `{ }` | Extra `api.yaml` settings, merged over the generated ones. |
-| `api.users` | `{ }` | Passwords for the built-in users `wazuh` and `wazuh-wui`, set after the API starts. Without an entry the upstream default stays. |
-| `api.users.<name>.passwordFile` | none | File with the password this user must have. The API requires 8 to 64 characters with upper, lower, digit and symbol. |
-| `api.users.<name>.defaultPasswordFile` | none | File with the password the user has before this module changes it. Read through `LoadCredential`. Without it the upstream default applies, which is the user name. Used only when `passwordFile` does not authenticate. |
-| `activeResponse.enable` | `true` | Runs `wazuh-execd` as `wazuh` and writes the upstream default `<command>` definitions. No `<active-response>` block is written, so no response runs until `extraConfig` adds one. |
-| `indexer` | `null` | The indexer connection. It drives the `<indexer>` block, the keystore entries and the filebeat output. `null` disables all three and vulnerability detection. |
-| `indexer.hosts` | `[ ]` | Indexer URLs, for example `https://indexer:9200`. |
-| `indexer.tls.ca` | none | CA the indexer certificates chain to. |
-| `indexer.tls.certificate` | none | Client certificate for the indexer. |
-| `indexer.tls.key` | none | Its private key. |
-| `indexer.usernameFile` | none | File with the indexer user name, one line. Written to the Wazuh keystore. |
-| `indexer.passwordFile` | none | File with that user's password, one line. Written to the Wazuh keystore. |
-| `filebeat.enable` | `true` | Ships alerts to the indexer with filebeat. Takes effect only when `indexer` is set. |
-| `filebeat.package` | `pkgs/filebeat-oss` | The filebeat package. The default is filebeat OSS 7.10.2, the version upstream ships. |
-| `filebeat.archives` | `false` | Also ships `logs/archives/archives.json` into `wazuh-archives-4.x-*`. Needs `logAll`. |
-| `filebeat.settings` | `{ }` | Extra `filebeat.yml` settings, merged over the generated ones. Dotted keys are accepted. |
-| `logAll` | `false` | Archives every event, not only alerts, under `logs/archives`. |
-| `alertLevel` | `3` | The minimum rule level that produces an alert. |
-| `integrations` | `{ }` | Integrations, one `<integration>` block each. A non-empty set runs `wazuh-integratord`. |
-| `integrations.<name>.name` | the attribute name | The integration program: `slack`, `virustotal`, `pagerduty`, `shuffle` or `maltiverse`. |
-| `integrations.<name>.hookUrl` | `null` | A webhook URL that is not a secret. The value goes into the Nix store. |
-| `integrations.<name>.hookUrlFile` | `null` | File with the webhook URL, one line. |
-| `integrations.<name>.apiKeyFile` | `null` | File with the API key, one line. |
-| `integrations.<name>.level` | `null` | The minimum alert level that the integration receives. |
-| `integrations.<name>.ruleIds` | `[ ]` | Rule IDs that the integration receives. Empty means every rule. |
-| `integrations.<name>.groups` | `[ ]` | Rule groups that the integration receives. Empty means every group. |
-| `integrations.<name>.eventLocation` | `null` | A regular expression for the alert location. |
-| `integrations.<name>.alertFormat` | `"json"` | The alert format. The packaged integrations read JSON only. |
-| `integrations.<name>.maxLog` | `null` | The maximum length of the log text sent to the integration. |
-| `integrations.<name>.options` | `null` | A JSON object that the integration receives as its options file. |
-| `integrations.<name>.timeout` | `null` | Seconds before a request of the integration times out. |
-| `integrations.<name>.retries` | `null` | The number of retries after a failed request. |
-| `github` | `null` | The GitHub audit-log module of `wazuh-modulesd`. `null` leaves it out. |
-| `github.apiAuth` | none | The organizations to read, one entry each. |
-| `github.apiAuth.*.orgName` | none | The GitHub organization. |
-| `github.apiAuth.*.apiTokenFile` | none | File with a token that can read the audit log of the organization, one line. |
-| `github.interval` | `"1m"` | The time between two reads of the audit log. |
-| `github.timeDelay` | `"30s"` | The delay that GitHub needs to publish an event. |
-| `github.curlMaxSize` | `"1M"` | The maximum size of one API response. |
-| `github.onlyFutureEvents` | `true` | Reads only events after the first start. `false` also reads the existing log. |
-| `github.eventType` | `"all"` | The event types to read: `all`, `git` or `web`. |
-| `settings` | `{ }` | Structured XML sections merged over generated defaults; lists replace repeated elements. See the structured configuration example below. |
-| `email.enable` | `false` | Runs `wazuh-maild` and turns on `email_notification`. |
-| `email.smtpServer` | `null` | The SMTP relay that `maild` connects to on port 25. `maild` has no SMTP authentication and no TLS. Set `smtpServer` or `sendmail`, not both. |
-| `email.sendmail` | `null` | A sendmail-compatible program, for example `msmtp`. The module runs it as `sendmail -t -i`. It must work without setuid. |
-| `email.from` | none | The sender address. |
-| `email.to` | none | The default recipients. |
-| `email.replyTo` | `null` | The Reply-To address. |
-| `email.heloServer` | `null` | The name that `maild` sends in HELO. |
-| `email.maxPerHour` | `12` | The maximum number of messages per hour. |
-| `email.idsName` | `null` | The manager name in the message header. |
-| `email.logSource` | `"alerts.log"` | The alert file that `maild` reads: `alerts.log` or `alerts.json`. |
-| `emailAlerts` | `[ ]` | Extra recipients for selected alerts, one `<email_alerts>` block each. Needs `email.enable`. |
-| `emailAlerts.*.to` | none | The recipients. |
-| `emailAlerts.*.level` | `null` | The minimum alert level. |
-| `emailAlerts.*.groups` | `[ ]` | Rule groups. Empty means every group. |
-| `emailAlerts.*.ruleIds` | `[ ]` | Rule IDs. Empty means every rule. |
-| `emailAlerts.*.eventLocation` | `null` | The alert location. |
-| `emailAlerts.*.format` | `"full"` | `full` or `sms`. |
-| `emailAlerts.*.doNotDelay` | `false` | Sends each alert at once. |
-| `emailAlerts.*.doNotGroup` | `false` | Sends each alert in its own message. |
-| `reports` | `[ ]` | Daily reports that `wazuh-monitord` mails, one `<reports>` block each. Needs `email.enable`. |
-| `reports.*.title` | `null` | The subject of the report. |
-| `reports.*.emailTo` | none | The recipients. |
-| `reports.*.group` | `null` | The rule group to report on. |
-| `reports.*.category` | `null` | The rule category to report on. |
-| `reports.*.rule` | `null` | The rule ID to report on. |
-| `reports.*.level` | `null` | The minimum alert level to report on. |
-| `reports.*.location` | `null` | The alert location to report on. |
-| `reports.*.srcip` | `null` | The source address to report on. |
-| `reports.*.user` | `null` | The user name to report on. |
-| `reports.*.showLogs` | `false` | Includes the logs in the report. |
-| `agentless.checks` | `[ ]` | Agentless checks, one `<agentless>` block each. A non-empty list runs `wazuh-agentlessd`. |
-| `agentless.checks.*.type` | none | The script under `agentless/`, for example `ssh_integrity_check_linux` or `ssh_generic_diff`. |
-| `agentless.checks.*.hosts` | none | Devices as `user@host`. Each one needs an entry in `agentless.credentials`. |
-| `agentless.checks.*.frequency` | none | Seconds between two checks. |
-| `agentless.checks.*.state` | none | `periodic` analyzes the output like a log. `periodic_diff` alerts when the output changes. |
-| `agentless.checks.*.arguments` | `null` | Directories for the integrity checks, or the commands for `ssh_generic_diff`. |
-| `agentless.credentials` | `{ }` | Login data per `user@host`, written to `agentless/.passlist`. |
-| `agentless.credentials.<name>.passwordFile` | `null` | File with the SSH password, one line. `null` logs in with `agentless.sshKeyFile`. |
-| `agentless.credentials.<name>.additionalPasswordFile` | `null` | File with the `su` password, one line. |
-| `agentless.sshKeyFile` | `null` | The private SSH key for devices without a password. It is installed for the `wazuh` user. |
-| `agentless.knownHosts` | `""` | `known_hosts` lines for every device. A device whose key is not listed is refused. |
-| `cluster` | `null` | The manager cluster. A value runs `wazuh-clusterd`. |
-| `cluster.name` | `"wazuh"` | The cluster name. Every node uses the same one. |
-| `cluster.nodeName` | none | The name of this node. |
-| `cluster.nodeType` | none | `master` or `worker`. |
-| `cluster.keyFile` | none | File with the cluster key: 32 letters and digits, the same on every node. |
-| `cluster.port` | `1516` | The TCP port of the master. |
-| `cluster.bindAddr` | `"0.0.0.0"` | The address that the master listens on. |
-| `cluster.nodes` | none | The address of the master. Workers connect to the first entry. |
-| `cluster.hidden` | `false` | Leaves the cluster information out of alerts. |
-| `cluster.haproxyHelper` | `null` | The HAProxy helper of the master, which balances agents across the nodes. |
-| `cluster.haproxyHelper.enable` | `true` | Runs the helper. `false` writes `haproxy_disabled` as `yes`. |
-| `cluster.haproxyHelper.address` | none | The address of the HAProxy Data Plane API. |
-| `cluster.haproxyHelper.port` | `5555` | The port of the Data Plane API, 1024 to 65535. |
-| `cluster.haproxyHelper.protocol` | `"http"` | `http` or `https`. `https` needs `caFile`. |
-| `cluster.haproxyHelper.user` | none | The Data Plane API user. |
-| `cluster.haproxyHelper.passwordFile` | none | File with the Data Plane API password, one line without a comma. |
-| `cluster.haproxyHelper.backend` | `"wazuh_reporting"` | The HAProxy backend that the helper manages. |
-| `cluster.haproxyHelper.resolver` | `null` | The HAProxy resolver for the backend servers. |
-| `cluster.haproxyHelper.caFile` | `null` | The CA certificate of the Data Plane API. |
-| `cluster.haproxyHelper.clientCertFile` | `null` | The client certificate. Set it together with `clientKeyFile`. |
-| `cluster.haproxyHelper.clientKeyFile` | `null` | The client key. |
-| `cluster.haproxyHelper.clientKeyPasswordFile` | `null` | File with the password of the client key, one line without a comma. |
-| `cluster.haproxyHelper.excludedNodes` | `[ ]` | Nodes that receive no agents. |
-| `cluster.haproxyHelper.frequency` | `null` | Seconds between two balance checks, 10 or more. |
-| `cluster.haproxyHelper.agentChunkSize` | `null` | Agents moved per step, 100 or more. |
-| `cluster.haproxyHelper.agentReconnectionTime` | `null` | Seconds between two reconnection steps. |
-| `cluster.haproxyHelper.agentReconnectionStabilityTime` | `null` | Seconds the cluster must be stable before agents move, 10 or more. |
-| `cluster.haproxyHelper.imbalanceTolerance` | `null` | The tolerated imbalance, a decimal above 0 and at most 1. |
-| `cluster.haproxyHelper.removeDisconnectedNodeAfter` | `null` | Minutes before a disconnected node leaves the backend. |
-| `syslogOutput` | `[ ]` | Syslog servers that receive alerts, one `<syslog_output>` block each. A non-empty list runs `wazuh-csyslogd`. |
-| `syslogOutput.*.server` | none | The address or host name of the syslog server. |
-| `syslogOutput.*.port` | `514` | The UDP port. |
-| `syslogOutput.*.level` | `null` | The minimum alert level. |
-| `syslogOutput.*.group` | `null` | The rule group. Separate several groups with `\|`. |
-| `syslogOutput.*.ruleIds` | `[ ]` | Rule IDs. Empty means every rule. |
-| `syslogOutput.*.location` | `null` | The alert location. |
-| `syslogOutput.*.useFqdn` | `false` | Sends the full host name. |
-| `syslogOutput.*.format` | `"default"` | `default`, `cef`, `splunk` or `json`. |
-| `extraConfig` | `""` | XML appended inside `<ossec_config>`. |
-| `path` | `[ ]` | Packages added to the daemons' PATH, for command readers and integrations. |
-
-### Receive syslog, run integrations and read GitHub
-
-`remote.listeners` replaces the single agent listener with a list. The
-example below keeps the agent listener and adds a syslog listener on
-514/udp. Port 514 is below 1024, so `wazuh-remoted` gets
-`CAP_NET_BIND_SERVICE`. With `openFirewall`, the module opens each listener
-port for its protocols.
-
-A syslog listener binds IPv4 unless its `ipv6` is set. Point each syslog
-sender at the IPv4 address of the server. If a sender resolves the server
-name to an IPv6 address first, its messages go to a port with no listener.
-UDP reports no error for that, so the messages are lost without a warning.
-
-```nix
-services.wazuh-server = {
-  remote.listeners = [
-    { connection = "secure"; port = 1514; protocol = [ "tcp" ]; queueSize = 131072; }
-    { connection = "syslog"; port = 514; protocol = [ "udp" ]; allowedIps = [ "192.168.1.0/24" ]; }
-  ];
-  integrations.virustotal = { apiKeyFile = "/run/secrets/wazuh-virustotal-key"; groups = [ "syscheck" ]; };
-  integrations.slack = { hookUrlFile = "/run/secrets/wazuh-slack-hook"; level = 11; };
-  github.apiAuth = [ { orgName = "example-org"; apiTokenFile = "/run/secrets/wazuh-github-token"; } ];
-};
-```
-
-`remoted` starts one child process for each listener. With more than one
-listener, systemd has no single main process to supervise. The unit stays
-active while one child runs, and systemd restarts it when the last child
-exits. If one listener stops while another runs, systemd does not restart
-it. The upstream `wazuh-control` behaves the same way.
-
-The module reads secret-file contents only at runtime. Use quoted runtime
-paths (for example `"/run/keys/slack-hook"`), not Nix path literals or
-`pkgs.writeText`, which would put the source secret in the store.
-The generated `ossec.conf` holds a
-token such as `@WAZUH_SECRET_integration-slack-hook_url@` in place of each
-secret. `wazuh-server-setup.service` then puts each value where its reader
-needs it:
-
-- The GitHub token goes into `/var/ossec/etc/ossec.conf`, because
-  `wazuh-modulesd` reads it from there. The file is mode 0640, owner root,
-  group wazuh.
-- Each integration secret goes into `/var/ossec/etc/secrets/<id>`, mode 0640,
-  owner root, group wazuh. The token stays in `ossec.conf`.
-
-`wazuh-integratord` gives the API key and the hook URL to the integration
-program as command-line arguments. In this module, those arguments are the
-tokens. The module replaces each program under `integrations/` with a
-wrapper. The wrapper starts the packaged Python script through
-`integration-secrets.py`, which reads the secret files and replaces the
-tokens inside the Python process. So no secret is a process argument.
-
-The upstream scripts write their arguments to `logs/integrations.log` on
-every call, also without debug mode. An uncaught request error names the
-URL path on stderr, and `wazuh-integratord` copies that output to
-`ossec.log`. `integration-secrets.py` replaces each secret, and the path of a
-secret URL, with `[secret]` in these outputs.
-
-The Wazuh XML reader does not decode entities, so a secret is not escaped.
-Each secret file must hold one line of printable ASCII. The line must not
-contain a space, `<`, `$` or `\`. If a secret breaks this rule, the setup
-unit stops with an error and leaves the installed `ossec.conf` unchanged.
-
-The API can return the manager configuration. For API users without
-permission to update the configuration, it masks only `authd.pass` and
-`cluster.key` (`SENSITIVE_FIELD_PATHS` in
-`framework/wazuh/rbac/decorators.py`). It does not mask the GitHub token. So
-every API user who can read the manager configuration can read the GitHub
-token. The integration secrets are not in `ossec.conf`, so the API does not
-return them.
-
-### Send alerts by e-mail and to a syslog server
-
-`email.enable` runs `wazuh-maild`. `maild` speaks plain SMTP on port 25,
-without authentication and without TLS. For a relay that needs either, run
-a local relay or use `email.sendmail` with a program such as `msmtp`.
-`emailAlerts` adds recipients for selected alerts. `reports` defines daily
-reports that `wazuh-monitord` builds and mails after midnight.
-
-`syslogOutput` runs `wazuh-csyslogd`, which sends selected alerts over UDP.
-
-```nix
-services.wazuh-server = {
-  email = {
-    enable = true;
-    smtpServer = "127.0.0.1";
-    from = "wazuh@example.com";
-    to = [ "soc@example.com" ];
-  };
-  emailAlerts = [ { to = [ "oncall@example.com" ]; level = 10; doNotDelay = true; } ];
-  syslogOutput = [ { server = "192.168.1.3"; level = 7; format = "json"; } ];
-};
-```
-
-The upstream reference defines `email_alert_level` as the minimum alert
-level for an e-mail. The generated default is 12. To mail lower levels, set
-`settings.alerts.email_alert_level`. The VM check sets it to 5.
-
-`database_output` is not available. Wazuh removed it upstream: version
-4.14.8 has no `wazuh-dbd` and ignores the block with a deprecation warning.
-The module refuses the block, so that a host does not expect alerts in a
-database.
-
-### Monitor devices without an agent
-
-`agentless.checks` runs `wazuh-agentlessd`. It logs in to each device over
-SSH through the upstream expect scripts under `agentless/`. The passwords
-and the key come from root-only files. The setup unit writes the passwords
-to `agentless/.passlist` and the key to `/var/ossec/.ssh`. The scripts send
-a password over the terminal of the SSH session, not as a process argument.
-
-```nix
-services.wazuh-server.agentless = {
-  checks = [
-    { type = "ssh_integrity_check_linux"; hosts = [ "monitor@192.168.1.108" ];
-      frequency = 3600; state = "periodic"; arguments = "/etc /usr/bin"; }
-  ];
-  credentials."monitor@192.168.1.108".passwordFile = "/run/secrets/agentless-monitor";
-  knownHosts = "192.168.1.108 ssh-ed25519 AAAAC3...";
-};
-```
-
-The upstream scripts answer "yes" to an unknown host key. The module sets
-`StrictHostKeyChecking yes` instead, so `agentless.knownHosts` must list
-every device. A password must be one line without `|`, because `|`
-separates the fields of `.passlist`.
-
-The `ssh_generic_diff` script sends its commands without waiting for the
-prompt. So the captured output can vary from run to run, and a
-`periodic_diff` check can alert without a change on the device.
-
-### Run a manager cluster
-
-`cluster` runs `wazuh-clusterd`. Every node needs the same `name` and the
-same key in `keyFile`. The key must be 32 letters and digits. If it is
-not, the setup unit stops and keeps the installed `ossec.conf`. The key is
-written into the installed `ossec.conf`, where `wazuh-clusterd` reads it.
-The API masks it.
-
-```nix
-services.wazuh-server.cluster = {
-  nodeName = "master-node";
-  nodeType = "master";
-  keyFile = "/run/secrets/wazuh-cluster-key";
-  nodes = [ "192.168.1.10" ];
-};
-```
-
-`cluster.haproxyHelper` configures the HAProxy helper of the master. Its
-passwords are written into the installed `ossec.conf`, and the API does not
-mask them. The cluster reader splits a helper value at commas, so a helper
-password must not contain a comma. The CA, client certificate and key are
-installed under `etc/credentials` through `credentialFiles`. The option
-bounds follow the schema that `wazuh-clusterd` checks, so a value that the
-daemon would refuse fails at evaluation. The VM check parses a disabled
-helper. It does not run the helper against a Data Plane API.
-
-With `openFirewall`, the master opens `cluster.port`. The disabled
-`settings.cluster` block of earlier configurations still works, but it
-cannot be combined with `cluster`.
-
-### Enroll an agent against the server
-
-```sh
-nix build .#checks.x86_64-linux.server-enrollment
-```
-
-The check boots two VMs. One runs `services.wazuh-server` with `auth.tls` from
-the test PKI and `logAll = true`. The other runs `services.wazuh-agent` with
-`manager.host = "server"`, the same enrollment password file, and
-`registration.caFile` set to the test CA. It confirms five things:
-
-1. The agent verifies the server certificate and enrolls against `authd`.
-2. The server records the agent, under `registration.agentName`, in its own
-   `/var/ossec/etc/client.keys`.
-3. `wazuh-agentd` logs `(4102): Connected to the server` and reports
-   `status='connected'`.
-4. A journal entry written on the agent appears in the server's
-   `logs/archives/archives.json`.
-5. A journal entry that matches an `sshd` rule appears in
-   `logs/alerts/alerts.json`.
-
-The check also confirms that no `wazuh-*` unit failed on either VM and that
-the server `ossec.log` holds no `CRITICAL` line. It needs no container image.
-
-### Ship alerts to an indexer
-
-Set `services.wazuh-server.indexer` to connect the server to a Wazuh
-indexer. Every path points outside the Nix store. The user name and the
-password are files with one line each, and PID 1 reads them, so they can be
-root-only.
-
-```nix
-services.wazuh-server.indexer = {
-  hosts = [ "https://indexer.example.net:9200" ];
-  tls = {
-    ca = "/run/secrets/wazuh-ca.pem";
-    certificate = "/run/secrets/wazuh-server.pem";
-    key = "/run/secrets/wazuh-server.key";
-  };
-  usernameFile = "/run/secrets/wazuh-indexer-username";
-  passwordFile = "/run/secrets/wazuh-indexer-password";
-};
-```
-
-The option drives three things. The generated `ossec.conf` enables the
-`<indexer>` block and vulnerability detection. The setup unit writes the
-user name and the password to the Wazuh keystore (`queue/keystore`) with
-`wazuh-keystore`, which is where `wazuh-modulesd` reads them. The unit
-`wazuh-filebeat` reads `logs/alerts/alerts.json` and writes each alert to
-`wazuh-alerts-4.x-*` on the indexer.
-
-`wazuh-filebeat` runs filebeat OSS 7.10.2 (`packages.filebeat-oss`), the
-shipper the upstream server package installs, with the Wazuh filebeat module
-and the index template from the pinned Wazuh source. The licensed filebeat
-in nixpkgs (7.17) calls `GET /_license` on connect, and the indexer rejects
-that call. filebeat loads the template and the ingest pipeline on every
-connection to the indexer. The unit runs as the user `wazuh-filebeat`, a
-member of the `wazuh` group, under the same sandbox as the daemons. It
-writes only its registry under `/var/lib/wazuh-filebeat`. The credentials
-and the TLS files reach it through `LoadCredential` and never enter the
-store. `services.wazuh-server.filebeat` has these options:
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `enable` | `true` | Run `wazuh-filebeat` when `indexer` is set. |
-| `package` | `packages.filebeat-oss` | The filebeat package. |
-| `archives` | `false` | Also ship `logs/archives/archives.json`. Needs `logAll`. |
-| `settings` | `{ }` | Extra `filebeat.yml` keys, merged over the generated ones. |
-
-```sh
-nix build .#checks.x86_64-linux.server-indexer
-```
-
-The check boots two VMs, the indexer and the server. It waits for the
-indexer health, confirms the keystore and the enabled `<indexer>` block,
-waits for filebeat to connect, writes an sshd line into a monitored file on
-the server, and finds the resulting alert (rule 5710) in `wazuh-alerts-4.x-*`
-with `curl` against the indexer.
+| Check | VMs | What it proves |
+|-------|-----|----------------|
+| `options-documented` | none | Every option of the four modules appears in its guide. |
+| `component-evaluation` | none | The indexer and dashboard modules evaluate in their supported combinations. |
+| `component-rendering` | none | The dashboard credential rendering and the TLS patch boundaries. |
+| `server-package` | none | The server binaries, the Python framework and API imports, and the ELF links. |
+| `server-config-eval` | none | The server configuration renderer and its assertions. |
+| `agent` | 4 | Agent activation, the generated `ossec.conf`, journal collection, the daemon PATH and the active-response grants. |
+| `enrollment` | 2 | The agent enrolls with the Wazuh manager container image and delivers an event. |
+| `integration` | 1 | The upstream agent integration suites run against the built binaries. Takes several hours. |
+| `server` | 2 | The server daemons, chroots, ports, ruleset, API users, the API guard and API authentication. |
+| `server-config` | 1 | The structured configuration against the native Wazuh readers, and the monitoring scans. |
+| `server-reference` | 1 | The manager reference extensions: parsers, credential placement and custom integrations. |
+| `server-enrollment` | 2 | The agent module enrolls with the server module and delivers events and alerts. |
+| `server-indexer` | 2 | filebeat ships a server alert to the indexer. |
+| `server-runtime` | 2 | A syslog listener, `wazuh-integratord`, the Slack integration and secret handling. |
+| `server-optional` | 1 | `wazuh-maild` and `wazuh-csyslogd` against local receivers. |
+| `server-agentless` | 2 | `wazuh-agentlessd` against an SSH target. |
+| `server-cluster` | 2 | `wazuh-clusterd` on a master and a worker. |
+| `indexer` | 2 | The indexer, its security configuration, and the rotation and recovery of declared user hashes. |
+| `dashboard` | 3 | The dashboard against an indexer and a test manager API. |
+| `dashboard-server` | 3 | The dashboard against `services.wazuh-server`. |
+| `stack` | 4 | The agent, server, indexer and dashboard together. |
+
+The guide of each module describes its checks in more detail. CI runs every
+check except `integration`. See [Use the binary cache](#use-the-binary-cache).
 
 ### Run the full stack check
 
@@ -1046,156 +187,18 @@ native API has no check of its own yet. A failure there leaves every earlier
 result in the log. Every timeout is sized for a shared builder. The indexer
 takes about 400 s to security-ready there, and the API took 350 s to listen.
 
-## Test in a QEMU VM
-
-The flake builds a throwaway VM with the agent enabled. The VM configuration
-is `examples/vm.nix`.
-
-1. Build and start the VM.
-
-   ```bash
-   nix build .#vm
-   ./result/bin/run-wazuh-agent-vm
-   ```
-
-2. Log in on the serial console. The user is `root` and the password is
-   `wazuh`. The console also accepts `Ctrl-a x` to quit QEMU.
-
-3. Check the units.
-
-   ```bash
-   systemctl status wazuh.target
-   journalctl -u wazuh-agent-auth -b
-   ```
-
-`nixos-rebuild build-vm --flake .#wazuh-agent-vm` builds the same VM.
-
-The VM sends agent traffic to `10.0.2.2`. That address is the host machine
-under QEMU user mode networking. Run a Wazuh manager on the host, and the
-agent reaches it with no extra network setup. The VM also forwards host port
-2222 to its own SSH port.
-
-The VM writes to a disk image named `wazuh-agent.qcow2` in the working
-directory. Delete that file to start from a clean state. This matters after
-enrollment, because the agent keeps its key in `/var/ossec`.
-
-## Run the automated test
-
-```bash
-nix build .#checks.x86_64-linux.agent
-```
-
-The test boots a VM, then confirms that activation succeeds, that the generated
-`ossec.conf` is correct, that logcollector reads the journal, and that every
-command reader resolves on the daemon PATH. It needs no manager, so it stays
-fast.
-
-## Run the enrollment test
-
-```bash
-nix build .#checks.x86_64-linux.enrollment
-```
-
-This test boots two VMs. One runs the agent module. The other runs the Wazuh
-manager container image from Docker Hub. It confirms that the agent enrolls
-against `authd`, that the manager records the enrollment in its own
-`client.keys`, that the agent connects to `remoted`, and that an event written
-on the agent reaches the manager's archive.
-
-Expect about six minutes. Most of that is the manager: the unit loads a
-multi-gigabyte image, and the manager then initializes its databases before it
-opens port 1515. The test starts the manager first and boots the agent only
-after those ports are open, so the console stays quiet during the wait.
-
-The manager image is not pinned in this repository, because a manifest digest
-and a hash cannot be guessed. Write the pin first:
-
-```bash
-./nixos/tests/common/prefetch-manager-image.sh 4.14.7
-git add nixos/tests/common/wazuh-manager-image.amd64.json
-```
-
-The script writes `nixos/tests/common/wazuh-manager-image.<arch>.json`.
-`nixos/tests/common/wazuh-manager-image.nix` reads that file and passes it to
-`dockerTools.pullImage`, so no hash is edited by hand. Until the file exists,
-this check throws with the same instructions. `checks.agent` is not affected.
-
-Commit the file before you run the check. A flake copies only the files that
-git tracks, so an uncommitted pin is invisible to Nix.
-
-One run produces one architecture. Pass a second argument to pin the other:
-
-```bash
-./nixos/tests/common/prefetch-manager-image.sh 4.14.7 arm64
-```
-
-Keep the manager version in step with `version` in `pkgs/wazuh-agent.nix`.
-Wazuh supports an agent older than its manager. It does not support an agent
-newer than its manager.
-
-The test runs the manager alone. It does not run the indexer or the dashboard.
-The check reads the manager's archive file and never reads an index, the two
-extra images are much larger than the manager image, and the indexer needs a
-TLS certificate set that this repository does not hold.
-
-## Run the upstream integration suites
-
-```bash
-nix build .#checks.x86_64-linux.integration
-```
-
-This check boots one VM and runs the upstream integration tests from
-`modules/wazuh/tests/integration` with `pytest`. The test framework comes from
-[wazuh/qa-integration-framework](https://github.com/wazuh/qa-integration-framework),
-which `pkgs/wazuh-testing.nix` builds at the tag that matches the submodule.
-
-The suite proves the built binaries, not the NixOS module. The suite stops the
-module's systemd units, rewrites `ossec.conf` per test, and runs the daemons as
-root through `wazuh-control`, the way upstream packages run them. The module
-units and the sandbox are the ground of `checks.agent` and
-`checks.enrollment`.
-
-The default run covers every agent-side suite: `test_agentd`,
-`test_enrollment`, `test_execd`, `test_fim`, `test_logcollector`, `test_sca`
-and `test_syscollector`. Expect several hours. `test_fim` is most of that. To
-narrow the selection, pass `suites` or `extraPytestFlags` where `flake.nix`
-imports `nixos/tests/agent/integration.nix`.
-
-A short exclusion list applies to `test_fim`, and it lives in `suiteFlags` in
-`nixos/tests/agent/integration.nix` with a reason on each entry. The exclusions
-fall in two classes. The whodata cases and the audit-rule tests need audit
-infrastructure that NixOS cannot provide, such as the `audisp-af_unix`
-plugin at `/sbin` and the `yum` or `apt` package managers. Three single
-realtime cases lose a timing race inside a VM, and their scheduled
-counterparts cover the same assertions.
-
-The check writes two artifacts per suite into the output: `report-<suite>.xml`
-in JUnit form and `log-<suite>.txt` with the full pytest output. The check
-fails when any suite reports a failure.
-
-Expect friction on the first runs. The suites assume an upstream package
-installation, and three shims in `nixos/tests/agent/integration.nix` bridge the
-differences. That file documents each shim. A test that fails on an
-environment assumption rather than on agent behavior belongs in
-`extraPytestFlags` as a `--deselect` entry.
-
-To confirm the framework package alone, build it first:
-
-```bash
-nix build .#wazuh-testing
-```
-
-If the build reports a hash mismatch for the source, copy the hash from the
-error message into `pkgs/wazuh-testing.nix`.
-
-## Build the package alone
+## Build the packages
 
 ```bash
 nix build .#wazuh-agent
+nix build .#wazuh-server
+nix build .#wazuh-indexer
+nix build .#wazuh-dashboard
 ```
 
-The build fetches 27 dependency tarballs from `packages.wazuh.com`. The build
-host must reach that server.
+The agent and server builds fetch dependency tarballs from
+`packages.wazuh.com`, and the indexer and dashboard come from release packages
+on the same server. The build host must reach that server.
 
 ## Use the binary cache
 
@@ -1256,10 +259,13 @@ repositories only.
 
 ## Move to a new Wazuh version
 
+The agent and the server share one source pin in `pkgs/common/default.nix`.
+The indexer and the dashboard have their own release pins.
+
 1. Move the `modules/wazuh` submodule to the new tag.
 2. Read `DEPS_VERSION` in `src/Makefile` at that tag.
 3. Read `HTTP_REQUEST_BRANCH` in the same file.
-4. Regenerate the dependency hashes.
+4. Regenerate the agent dependency hashes.
 
    ```bash
    cd pkgs/dependencies
@@ -1267,265 +273,27 @@ repositories only.
      HTTP_REQUEST_REV=<new commit> ./prefetch-external-dependencies.sh
    ```
 
-5. Copy the three hashes that the script prints into `pkgs/wazuh-agent.nix`.
-6. Set `version`, `dependencyVersion`, and `wazuhRev` in the same file.
+5. Copy the three hashes that the script prints into `pkgs/common/default.nix`.
+   The script output names `pkgs/wazuh-agent.nix`, which is the old location.
+6. Set `version`, `dependencyVersion`, and `wazuhRev` in `pkgs/common/default.nix`.
+7. Regenerate the server dependency hashes.
 
-The script rewrites `pkgs/dependencies/external_dependencies.nix`. It writes
-nothing if any download fails.
+   ```bash
+   ./pkgs/wazuh-server/prefetch-dependencies.sh
+   ```
 
-## Hardening
+8. Set `version` and `revision` in `pkgs/wazuh-indexer/source.json` and
+   `pkgs/wazuh-dashboard/source.json`.
+9. Regenerate the indexer and dashboard release hashes.
 
-The daemons run as the `wazuh` user under systemd. They start from the store
-path directly. This module does not use `security.wrappers`.
+   ```bash
+   ./pkgs/wazuh-indexer/prefetch.sh
+   ```
 
-An earlier version did. It built a setuid and setgid wrapper per daemon, at
-mode `-r-s--s--x` owned `wazuh:wazuh`. The final `x` is the world execute bit,
-so every local user could run those binaries as the account that owns
-`/var/ossec` and therefore `etc/client.keys`. The wrappers served no purpose,
-because systemd already sets `User` and `Group`, and because the `w_homedir`
-patch makes the daemons read `WAZUH_HOME` from the environment.
+10. Pin the manager container image for `checks.enrollment`. See
+    [Run the enrollment test](nixos/wazuh-agent/README.md#run-the-enrollment-test).
 
-Every unit drops all capabilities and runs with `NoNewPrivileges`,
-`ProtectSystem = "strict"` and `ReadWritePaths = [ "/var/ossec" ]`, plus the
-usual `Protect*` and `Restrict*` set.
-
-`SystemCallFilter`, `RestrictAddressFamilies`, `MemoryDenyWriteExecute` and
-`PrivateDevices` are applied. `checks.enrollment` is what tests them, because
-each one breaks a scan rather than the daemon that runs it, and `systemctl
-is-active` cannot see that. The check asserts that syscollector, SCA,
-rootcheck and file integrity monitoring each reach their own end line, and
-that no daemon died of a blocked syscall.
-
-`/var/ossec` is a split Nix/state tree. Package-owned `bin`, `lib`, `ruleset`,
-`wodles` and `agentless` are links to the selected package in `/nix/store`,
-and generated `etc/ossec.conf` is a store link too. An upgrade changes link
-targets instead of copying package data into mutable state. `logs`, `queue`,
-`var` and `tmp` remain real directories owned by `wazuh`.
-
-Four optional wodles are rejected when supplied through `config` or
-`extraConfig`: `aws-s3`, `azure-logs`, `gcloud-pubsub` and
-`docker-listener`. Their upstream implementations keep mutable databases
-beside their code, which is incompatible with a store-linked `wodles` tree.
-Move that state under `var` before enabling them.
-
-Two more directories are writable per unit rather than shared, because both
-decide what the agent runs.
-
-`etc` holds `ossec.conf`, which accepts a `<localfile>` with
-`<log_format>command</log_format>` and therefore names a program for
-`wazuh-logcollector` to run, and `shared/ar.conf`, which maps a response name
-to a binary. Only `wazuh-agentd` and `wazuh-agent-auth` write it:
-`agent-auth` writes `etc/client.keys`, and `agentd` writes it too on a
-manager-triggered re-enrollment, plus `etc/shared/merged.mg` when the manager
-pushes shared configuration. The other daemons read `etc` and lose the write.
-
-`active-response/bin` is a real root-owned sticky directory because three
-responses create mutex directories beside themselves. Each program in it is
-a root-owned link to the package output. The `wazuh` group can create and
-remove its runtime locks but cannot replace those links. Only `wazuh-execd`
-gets a writable mount for the directory.
-
-Upstream creates those mutex directories as mode `0070`, leaving the owner
-unable to write the PID file inside. The package patches that to owner mode
-`0700`, so non-root active responses can acquire their locks.
-
-`restart-wazuh` and `restart.sh` are removed from the package output. They
-start daemons outside systemd, and removing them avoids a replaceable child
-`NoExecPaths` mount on the `bin` store link. `lib` stays executable for the
-response binaries' rpath.
-
-The layout unit runs as root, owns the fixed structure, migrates old copied
-trees to links, and preserves host state. Sticky mixed directories prevent
-the daemon UID from replacing root-owned links while still allowing
-`client.keys`, manager-pushed shared data and response mutexes to change.
-The response directory remains `noexec`; store-linked programs resolve onto
-the executable store mount, while a regular payload staged beside them does
-not execute.
-
-The setup unit runs with `PrivateNetwork`. It manages links, initializes state
-and reads a credential that PID 1 already resolved, so it has no reason to see
-a network.
-
-Each unit's writable directories all carry `noexec`, so writable and
-executable never overlap: a payload staged in `queue`, `logs`, `tmp` or
-`active-response` cannot run. Store links still execute from the store mount.
-
-`wazuh-syscheckd` carries `IPAddressDeny = "any"`. The rootcheck port probe
-binds and closes without one packet, and the manager path runs through
-`wazuh-agentd` over a Unix socket, so syscheckd works with no IP traffic at
-all. The other daemons keep their traffic: a host configuration can point
-reader commands and wodles at the network, and a deny there fails silently.
-
-`SocketBindDeny` is left out on every unit, on purpose. Wazuh binds every
-client socket to an ephemeral port before it connects (`OS_Connect` in
-`src/os_net/os_net.c`), so a bind deny cuts the agent off from its manager:
-`checks.enrollment` fails with `(1208): Unable to connect to enrollment
-service`. An allow rule for the port-0 bind is no fix, because a compromised
-daemon can bind port 0 and listen on the ephemeral port it gets, which is
-the exact thing the deny was for.
-
-Four other options are left out on purpose. `ProtectProc`, `ProcSubset`,
-`PrivateUsers` and `PrivatePIDs` each hide or remap other processes. rootcheck
-finds a hidden process by comparison of `kill(pid, 0)` and `getsid(pid)`
-against `/proc/<pid>`. Any of those four makes the two views disagree for every
-process on the host, so rootcheck reports the whole process table as hidden
-processes. The agent does not fail. It produces findings that are not real.
-
-`ProtectHome` is `read-only` rather than `true`, because `true` replaces
-`/root` and `/home` with empty directories, and syscheck logs no error when it
-monitors an empty directory.
-
-To relax any of this for one daemon, set the option again:
-
-```nix
-systemd.services.wazuh-syscheckd.serviceConfig.ProtectHome = false;
-```
-
-## Known limits
-
-- The build is not reproducible across Wazuh dependency versions. The
-  `libbpf-bootstrap` CMake file ships in the dependency tarball, not in
-  `wazuh/wazuh`, so it changes without a matching source tag. `prePatch` edits
-  that file by structure and aborts the build if the structure changes.
-- The derivation sets `dontFixup = true`.
-- File integrity monitoring runs in scheduled mode. `whodata` mode loads an
-  eBPF object, and `bpf` is in `@privileged` rather than `@system-service`, so
-  it needs a `SystemCallFilter` exception that this module does not add.
-- `activeResponse.capability` offers six of the scripts the package ships.
-  `restart-wazuh` and `restart.sh` are not among them: they restart through
-  `wazuh-control`, which starts daemons outside the supervision systemd
-  already provides. `ipfw`, `npf` and `pf` are BSD firewalls, and `kaspersky`
-  needs a vendor CLI that is not packaged here.
-- With active response enabled, a local compromise of the `wazuh` user
-  reaches whatever `wazuh-execd` holds. execd reads commands from
-  `queue/alerts/execq`, a socket the `wazuh` user owns, and the response
-  list in `etc/shared/ar.conf` is a file the manager writes through the same
-  user. This is upstream's architecture, and no mount in this module closes
-  it. The read-only code trees raise the cost of that path. They do not
-  remove it. Weigh this in the same place the `disable-account` warning
-  points: what execd holds is what a compromise gains.
-
-### Structured server configuration
-
-`services.wazuh-server.settings` uses upstream XML element names. Attribute
-sets create nested elements, lists repeat elements in order, booleans become
-`yes`/`no`, and `null` omits an element. `_attributes` supplies attributes;
-`_text` supplies the text of an attributed element. For example:
-
-```nix
-services.wazuh-server.settings = {
-  global.agents_disconnection_time = "10m";
-  global.white_list = [ "127.0.0.1" "^localhost.localdomain$" "127.0.0.53" ];
-  syscheck.auto_ignore = {
-    _attributes = { frequency = 10; timeframe = 3600; };
-    _text = false;
-  };
-  localfile = [{ log_format = "journald"; location = "journald"; }];
-};
-users.users.wazuh.extraGroups = [ "systemd-journal" ];
-```
-
-Settings merge recursively over generated defaults, so the example replaces
-the disconnection timeout. Lists replace the entire default list: include
-`/var/ossec/logs/active-responses.log` yourself when replacing `localfile`.
-`settings` takes precedence over `logAll` and `alertLevel` in the XML; prefer
-those dedicated options unless independent archive formats are needed.
-`extraConfig` remains raw XML appended after the structured configuration.
-
-Supported sections are `global`, `alerts`, `logging`, `rootcheck`, `syscheck`,
-`sca`, `wodle`, `localfile`, `ruleset`, `rule_test`, `command`,
-`active-response`, `vulnerability-detection`, and a disabled `cluster`.
-Remote listeners, enrollment, indexer connections, integrations and GitHub
-use their dedicated options because those also configure services and
-credentials. Email and clustering cannot be enabled: their daemons are not
-provided. Vulnerability detection requires an indexer.
-
-Wazuh's XML reader does not decode entities. The renderer therefore preserves
-literal ampersands instead of changing their meaning to `&amp;`, rejects `<`
-and trailing backslashes in text, and rejects quotes/angle brackets/newlines
-in attributes. This follows Wazuh's reader, so output containing ampersands
-may not parse with a standard XML library. It validates representation, not
-all upstream section names, values, or operating-system permissions.
-
-[examples/server-parity.nix](examples/server-parity.nix) translates a manager
-configuration with two listeners, enrollment, FIM, rootcheck, SCA,
-syscollector, indexer, VirusTotal, Slack and GitHub. It adapts Debian file
-logs to journald and filesystem paths to NixOS. Command collectors run with
-`services.wazuh-server.path`; they retain the service's permissions (for
-example, unprivileged netstat cannot identify every process). The packaged
-`restart-wazuh` command is intentionally absent because systemd owns restarts.
-CIS-CAT and osquery stay disabled. Stock SCA policies target distributions
-other than NixOS, and enabling inventory does not by itself supply the
-agent module's Nix package inventory service. Configure suitable policies
-and inventory sources for the host rather than assuming Debian results.
-
-All `settings` and `extraConfig` values are public in the Nix store. Put API
-keys, tokens and webhooks in the dedicated secret-file options; provision
-the example's `/run/keys` files with your secret manager. TLS paths are
-inputs: setup copies them into Wazuh's runtime directory.
-
-`nix build .#checks.x86_64-linux.server-config` checks the merged configuration
-with the native Wazuh readers, waits for each monitoring scan to finish,
-and proves journald and command events reach the manager archive.
-
-Structured `active-response` blocks require `activeResponse.enable = true`.
-The generator places command definitions before response rules, as Wazuh
-resolves command names while it reads the configuration. Enabling a rule
-still requires the permissions described under `activeResponse.enable`;
-the renderer does not grant firewall or account-management privileges.
-
-### Manager reference extensions
-
-The module targets the packaged Wazuh 4.14.8 readers. Native sections can use
-`settings` with upstream element names, including `labels`, `agent-upgrade`,
-`fluent-forward`, `ms-graph`, `office365`, `socket`, `task-manager`, `wdb`,
-`gcp-pubsub` and `gcp-bucket`. The documentation heading “wazuh-db” corresponds
-to the XML element `wdb`. Wodle names remain attributes, for example
-`settings.wodle = [{ _attributes.name = "aws-s3"; disabled = true; }];`.
-
-| Option | Default | Purpose |
-|---|---|---|
-| `secretFiles` | `{ }` | Named runtime source files for element-text secrets. Refer with `{ _secret = "name"; }` in `settings` or `auth.settings`. |
-| `credentialFiles` | `{ }` | Named opaque files copied at activation to `/var/ossec/etc/credentials/<name>`, root:wazuh 0640. Refer with `{ _credential = "name"; }`. |
-| `auth.settings` | `{ }` | Additional upstream auth fields, including force policy, ciphers, verification and timing. Cannot replace service-owned port, enable or credential paths. |
-| `indexer.enable` | `true` | Enable the inventory indexer connector; independent of Filebeat alert shipping. |
-| `indexer.tls.additionalCas` | `[ ]` | Additional CA files installed for the connector and Filebeat. |
-| `remote.listeners.*.ridsClosingTime` | `null` | Secure listener RID file closing interval. |
-| `remote.listeners.*.connectionOvertakeTime` | `null` | Connection takeover delay in seconds, 0–3600. |
-| `remote.listeners.*.allowHigherVersions` | `null` | Whether a secure listener accepts newer agents. |
-| `integrationScripts` | `{ }` | Python script paths keyed by `custom-*` integration name. Scripts use the packaged Python interpreter and the existing secret-redaction bootstrap. |
-
-For example:
-
-```nix
-services.wazuh-server = {
-  secretFiles.office = "/run/keys/office-client-secret";
-  credentialFiles.google = "/run/keys/google-service-account.json";
-  settings.office365.api_auth = {
-    tenant_id = "tenant-id";
-    client_id = "client-id";
-    client_secret = { _secret = "office"; };
-  };
-  settings.gcp-pubsub.credentials_file = { _credential = "google"; };
-};
-```
-
-Supply the remaining required upstream fields for each collector. Secret source
-paths must be runtime strings outside the Nix store. Inline secret references
-are refused in XML attributes and in `wodle`, `localfile`, `command`, `gcp-pubsub`, and `gcp-bucket`, where
-upstream may expose text in subprocess arguments. Use collector credential files
-or profiles there. Opaque credential files preserve whitespace and JSON bytes;
-inline secrets follow the manager's existing single-line validation. Resolved
-inline secrets are present in the installed configuration and visible to API
-users allowed to read it. Upstream masks only `authd.pass` and `cluster.key`;
-Office365, MS Graph and similar client secrets are readable by any API principal
-allowed to read manager configuration. They are absent from the generated store
-configuration.
-
-When AWS, Azure, Google Cloud or Docker collectors are configured, the module
-installs real, root-owned collector code below `/var/ossec/wodles`. AWS, Azure
-and Google Cloud databases use `/var/ossec/var/wodles`, keeping writable state
-separate from code. External API availability, account permissions and collector
-configuration remain host responsibilities. Docker monitoring also requires
-access to the host's Docker socket; the module does not grant that access
-implicitly. Custom integrations currently support Python scripts only.
+`prefetch-external-dependencies.sh` rewrites
+`pkgs/dependencies/external_dependencies.nix`. Each script writes nothing if
+any download fails. Run the scripts on a host that can reach
+`packages.wazuh.com`.
