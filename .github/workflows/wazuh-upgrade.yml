@@ -1,0 +1,214 @@
+# Opens a pull request when Wazuh publishes a new release.
+#
+# Each day the workflow reads the latest stable wazuh/wazuh release. If the
+# pins name an older version and no pull request for the release is open, it
+# runs scripts/upgrade-wazuh.sh. If the pins move, it commits them to the branch
+# automation/wazuh-<version> and opens or updates a pull request against the
+# branch that the workflow ran on. The build workflow then builds and tests
+# the new pins. Nothing merges without review.
+#
+# GitHub runs scheduled workflows only from the default branch. Until this
+# file is on main, start it by hand from the Actions tab.
+#
+# Setup, once:
+#   1. Settings > Actions > General > Workflow permissions: allow GitHub
+#      Actions to create and approve pull requests.
+#   2. Optional: add a fine-grained token with contents and pull-requests
+#      write access as the repository secret WAZUH_UPGRADE_TOKEN.
+#      Without it, the workflow pushes with GITHUB_TOKEN. GitHub does not start
+#      the pull_request workflows for such a push, so this workflow dispatches
+#      build.yml on the branch itself. The run shows on the pull request head
+#      commit.
+
+name: wazuh-upgrade
+
+on:
+  schedule:
+    # Daily at 06:17 UTC.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Wazuh version, for example 4.14.9, or latest'
+        required: false
+        default: latest
+      skip-manager-image:
+        description: 'Do not pin the wazuh/wazuh-manager image for checks.enrollment'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: wazuh-upgrade
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.WAZUH_UPGRADE_TOKEN || secrets.GITHUB_TOKEN }}
+      BASE_BRANCH: ${{ github.ref_name }}
+      # Step conditions cannot read secrets directly.
+      HAS_UPGRADE_TOKEN: ${{ secrets.WAZUH_UPGRADE_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.WAZUH_UPGRADE_TOKEN || secrets.GITHUB_TOKEN }}
+          # The script moves the modules/wazuh gitlink. It does not need the
+          # submodule contents.
+          submodules: false
+
+      - name: Decide whether an upgrade is due
+        # Cheap check before the Nix install and the image download.
+        id: resolve
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.version || 'latest' }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$REQUESTED" = latest ]; then
+            target=$(gh api repos/wazuh/wazuh/releases/latest --jq .tag_name)
+          else
+            target=$REQUESTED
+          fi
+          target=${target#v}
+          if ! [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Not a Wazuh version: $target"
+            exit 1
+          fi
+          current=$(sed -n 's/^ *version = "\([^"]*\)";.*/\1/p' pkgs/common/default.nix | head -n 1)
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          due=true
+          if [ "$target" = "$current" ]; then
+            echo "Wazuh $current is current." >> "$GITHUB_STEP_SUMMARY"
+            due=false
+          elif [ "$EVENT" = schedule ] && [ -n "$(gh pr list --head "automation/wazuh-$target" --base "$BASE_BRANCH" --state open --json number --jq '.[0].number // empty')" ]; then
+            # A manual dispatch still regenerates the pull request.
+            echo "A pull request for Wazuh $target is already open." >> "$GITHUB_STEP_SUMMARY"
+            due=false
+          fi
+          echo "due=$due" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        if: steps.resolve.outputs.due == 'true'
+        # The manager image pin downloads several GB.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          df -h /
+
+      - uses: cachix/install-nix-action@v31
+        if: steps.resolve.outputs.due == 'true'
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = false
+
+      - name: Run the upgrade script
+        id: upgrade
+        if: steps.resolve.outputs.due == 'true'
+        shell: bash
+        env:
+          # The script reads GITHUB_TOKEN for the GitHub API rate limit.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED: ${{ steps.resolve.outputs.target }}
+          SKIP_IMAGE: ${{ inputs.skip-manager-image && '--skip-manager-image' || '' }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/upgrade.log"
+          # Exit 1 restores every pin file. Exit 2 is bad usage.
+          # shellcheck disable=SC2086
+          nix develop --command ./scripts/upgrade-wazuh.sh $SKIP_IMAGE "$REQUESTED" | tee "$log"
+          last=$(tail -n 1 "$log")
+          read -r state a b <<< "$last"
+          case "$state" in
+            changed)
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "old=$a" >> "$GITHUB_OUTPUT"
+              echo "new=$b" >> "$GITHUB_OUTPUT"
+              echo "Wazuh $a -> $b" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            current)
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "Wazuh $a is current." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::Unexpected last line from upgrade-wazuh.sh: $last"
+              exit 1
+              ;;
+          esac
+
+      - name: Commit and push the new pins
+        if: steps.upgrade.outputs.changed == 'true'
+        id: push
+        shell: bash
+        env:
+          OLD: ${{ steps.upgrade.outputs.old }}
+          NEW: ${{ steps.upgrade.outputs.new }}
+        run: |
+          set -euo pipefail
+          branch="automation/wazuh-$NEW"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # The script stages the modules/wazuh gitlink in the index.
+          # git add -A keeps it. Do not reset the index.
+          git switch -c "$branch"
+          git add -A
+          git commit -m "wazuh: $OLD -> $NEW" \
+            -m "Generated by .github/workflows/wazuh-upgrade.yml with scripts/upgrade-wazuh.sh."
+          # The branch belongs to this workflow. A rerun replaces it.
+          git push --force origin "$branch"
+
+      - name: Open or update the pull request
+        if: steps.upgrade.outputs.changed == 'true'
+        shell: bash
+        env:
+          OLD: ${{ steps.upgrade.outputs.old }}
+          NEW: ${{ steps.upgrade.outputs.new }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+          SKIPPED_IMAGE: ${{ inputs.skip-manager-image && 'yes' || 'no' }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/pr-body.md"
+          {
+            echo "Moves the Wazuh pins from $OLD to $NEW."
+            echo
+            echo "Release notes: https://github.com/wazuh/wazuh/releases/tag/v$NEW"
+            echo
+            echo "- Generated by \`scripts/upgrade-wazuh.sh $NEW\` in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+            if [ "$SKIPPED_IMAGE" = yes ]; then
+              echo "- The wazuh/wazuh-manager image pin did **not** move. Pin it before merge."
+            fi
+            echo "- Merge only after the build workflow is green on this branch."
+          } > "$body"
+
+          existing=$(gh pr list --head "$BRANCH" --base "$BASE_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "wazuh: $OLD -> $NEW" --body-file "$body"
+          else
+            gh pr create --head "$BRANCH" --base "$BASE_BRANCH" \
+              --title "wazuh: $OLD -> $NEW" --body-file "$body"
+          fi
+
+          # Close older upgrade pull requests that this one replaces.
+          gh pr list --base "$BASE_BRANCH" --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"automation/wazuh-\")) | select(.headRefName != \"$BRANCH\") | .number" \
+            | while read -r n; do
+                gh pr close "$n" --delete-branch --comment "Replaced by the upgrade to $NEW."
+              done
+
+      - name: Start the build workflow on the branch
+        # A push with GITHUB_TOKEN does not start other workflows.
+        # workflow_dispatch is the exception.
+        if: steps.upgrade.outputs.changed == 'true' && env.HAS_UPGRADE_TOKEN != 'true'
+        env:
+          BRANCH: ${{ steps.push.outputs.branch }}
+        run: gh workflow run build.yml --ref "$BRANCH"
