@@ -18,7 +18,7 @@
   go,
 }:
 let
-  version = "4.14.7";
+  version = "4.14.10";
   imageName = "wazuh/wazuh-manager";
 
   # dockerTools.pullImage defaults its `arch` to go.GOARCH, so the pin must be

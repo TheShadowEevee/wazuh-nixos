@@ -1,7 +1,7 @@
 {
   "imageName": "wazuh/wazuh-manager",
-  "imageDigest": "sha256:8665c9807a5765253c79e4b072a1b7462c997bd69be949118a8d82ce44dd33e9",
-  "hash": "sha256-F1lBk+YuhXNZFphzD/QC7/mCzJLOCxuGqXtzGWn2msY=",
+  "imageDigest": "sha256:eabfa7ee4e63acb51c2130fa0583e30f843d030b091cf45a4fbd93d78fa21517",
+  "hash": "sha256-zc3XvirauqTLun8w/JNl2uYkuu59Im/vkQIiJ50PXuA=",
   "finalImageName": "wazuh/wazuh-manager",
-  "finalImageTag": "4.14.7"
+  "finalImageTag": "4.14.10"
 }
