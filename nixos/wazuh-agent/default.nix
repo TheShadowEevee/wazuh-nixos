@@ -16,9 +16,26 @@ let
   storeUnsafeWodles = [
     "aws-s3"
     "azure-logs"
-    "gcloud-pubsub"
     "docker-listener"
   ];
+  # Google Cloud is not a wodle in the configuration. Each collector has a
+  # section of its own. The bucket collector keeps gcloud.db beside its code
+  # (nixos/wazuh-server/cloud-wodles.nix moves that path for the server).
+  # The pubsub section was the intent of the old name gcloud-pubsub, which
+  # no configuration can contain, so it stays blocked with the bucket.
+  storeUnsafeSections = [
+    "gcp-pubsub"
+    "gcp-bucket"
+  ];
+  # The characters that can end a tag name.
+  tagNameEnds = [
+    ">"
+    "/"
+    " "
+    "\t"
+    "\n"
+  ];
+  hasSection = name: xml: any (end: hasInfix "<${name}${end}" xml) tagNameEnds;
 
   generatedConfig =
     if cfg.config != null then
@@ -1364,12 +1381,14 @@ in
           name:
           !(hasInfix ''name="${name}"'' configuredXml)
           && !(hasInfix "name='${name}'" configuredXml)
-        ) storeUnsafeWodles;
+        ) storeUnsafeWodles
+        && all (name: !(hasSection name configuredXml)) storeUnsafeSections;
         message = ''
-          services.wazuh-agent config enables a wodle that writes a SQLite
+          services.wazuh-agent config enables a collector that writes a SQLite
           database beside its code. wodles is linked into the read-only Nix
-          store, so aws-s3, azure-logs, gcloud-pubsub and docker-listener are
-          unsupported until their state paths are moved under /var/ossec/var.
+          store, so the wodles aws-s3, azure-logs and docker-listener and the
+          sections gcp-pubsub and gcp-bucket are unsupported until their state
+          paths are moved under /var/ossec/var.
         '';
       }
       {

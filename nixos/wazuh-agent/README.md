@@ -672,9 +672,10 @@ and generated `etc/ossec.conf` is a store link too. An upgrade changes link
 targets instead of copying package data into mutable state. `logs`, `queue`,
 `var` and `tmp` remain real directories owned by `wazuh`.
 
-Four optional wodles are rejected when supplied through `config` or
-`extraConfig`: `aws-s3`, `azure-logs`, `gcloud-pubsub` and
-`docker-listener`. Their upstream implementations keep mutable databases
+Five optional collectors are rejected when supplied through `config` or
+and the sections `gcp-pubsub` and `gcp-bucket`. Their upstream
+implementations keep mutable databases beside their code, which is
+incompatible with a store-linked `wodles` tree.
 beside their code, which is incompatible with a store-linked `wodles` tree.
 Move that state under `var` before enabling them.
 
