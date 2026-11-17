@@ -110,9 +110,11 @@ pkgs.testers.runNixOSTest {
         indexer2.fail(admin(new))
 
     def tls(port, *extra):
-        return indexer.succeed(
+        answer = indexer.succeed(
             "python3 ${./tls-probe.py} 192.168.1.10 " + str(port) + " indexer ${pki.ca} " + " ".join(extra)
         ).strip()
+        print(f"tls-probe {port} {' '.join(extra)}: {answer}")
+        return answer
 
     with subtest("the indexer refuses client certificates from another CA, and transport clients without one"):
         rogue = "${rogue.admin.cert} ${rogue.admin.key}"
@@ -137,14 +139,21 @@ pkgs.testers.runNixOSTest {
         # The handshake fails before the password counts.
         indexer.fail("curl --fail --silent --cacert ${pki.ca} --cert ${rogue.admin.cert} --key ${rogue.admin.key} -u 'admin:Test-password-42!' https://indexer:9200")
 
-    api_user = "curl --fail --silent --cacert ${pki.ca} -u 'api-user:Api-user-password-44!' https://indexer:9200/_plugins/_security/authinfo"
+    # The security REST API rejects weak passwords (score-based validation),
+    # so this one has no dictionary words.
+    api_user = "curl --fail --silent --cacert ${pki.ca} -u 'api-user:Qx7-Vm2#Lp9!Rt4z' https://indexer:9200/_plugins/_security/authinfo"
 
     with subtest("a user added through the security API is gone after an indexer restart"):
         # README: the security unit reapplies the declared users on each
         # restart and overwrites changes made through the security API. The
         # admin certificate is the only REST API admin in this module.
-        superuser = "curl --fail --silent --show-error --cacert ${pki.ca} --cert ${pki.admin.cert} --key ${pki.admin.key}"
-        indexer.succeed(superuser + " -H 'Content-Type: application/json' -XPUT https://indexer:9200/_plugins/_security/api/internalusers/api-user -d '{\"password\":\"Api-user-password-44!\"}'")
+        # No --fail: on an error, the body says why.
+        answer = indexer.succeed(
+            "curl --silent --show-error --write-out ' %{http_code}' --cacert ${pki.ca} --cert ${pki.admin.cert} --key ${pki.admin.key}"
+            + " -H 'Content-Type: application/json' -XPUT https://indexer:9200/_plugins/_security/api/internalusers/api-user"
+            + " -d '{\"password\":\"Qx7-Vm2#Lp9!Rt4z\"}'"
+        ).strip()
+        assert answer.endswith(" 200") or answer.endswith(" 201"), f"PUT internalusers/api-user: {answer}"
         indexer.wait_until_succeeds(api_user, timeout=60)
         invocation = indexer.succeed(f"systemctl show -p InvocationID --value {security}").strip()
         indexer.succeed("systemctl restart wazuh-indexer")
