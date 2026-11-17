@@ -95,6 +95,7 @@ stdenv.mkDerivation {
     ../patches/04-systemd-owns-privilege-drop.patch
     ../patches/05-fix-active-response-lock-mode.patch
     ../patches/06-collect-nix-store-packages.patch
+    ../patches/10-set-enrollment-recv-timeout.patch
   ];
 
   # GCC 13 and later reject the incompatible pointer types in the vendored
