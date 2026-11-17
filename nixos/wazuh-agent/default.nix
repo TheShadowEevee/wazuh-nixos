@@ -92,6 +92,24 @@ let
   ];
 
   preStart = ''
+    # Point a name at a store path without a moment in which the name does
+    # not exist. A daemon that starts while this unit runs again reads these
+    # names, and a daemon that finds etc/internal_options.conf absent exits
+    # with "(2301): Definition not found". The new link gets a temporary name
+    # in the same directory, and rename(2) puts it over the old entry.
+    # rename cannot put a link over a real directory, so a directory from an
+    # older layout goes first. That case has a gap, one time, at migration.
+    replace_link() {
+      local target="$1" dest="$2" temporary
+      temporary="$(dirname "$dest")/.$(basename "$dest").new"
+      if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+        rm -rf "$dest"
+      fi
+      rm -rf "$temporary"
+      ln -s "$target" "$temporary"
+      mv -T "$temporary" "$dest"
+    }
+
     # The fixed layout belongs to root. Package trees point straight into the
     # store instead of being mutable copies owned by the daemon account.
     if [ -L ${stateDir} ]; then
@@ -99,13 +117,11 @@ let
     fi
     install -d -m 0750 -o root -g ${wazuhGroup} ${stateDir}
     ${concatMapStringsSep "\n" (dir: ''
-      rm -rf ${stateDir}/${dir}
-      ln -s ${pkg}/${dir} ${stateDir}/${dir}
+      replace_link ${pkg}/${dir} ${stateDir}/${dir}
     '') immutablePackageDirs}
     ${concatMapStringsSep "\n" (dir: ''
       if [ -d ${pkg}/${dir} ]; then
-        rm -rf ${stateDir}/${dir}
-        ln -s ${pkg}/${dir} ${stateDir}/${dir}
+        replace_link ${pkg}/${dir} ${stateDir}/${dir}
       else
         rm -rf ${stateDir}/${dir}
       fi
@@ -131,18 +147,33 @@ let
     install -d -m 0750 -o root -g ${wazuhGroup} ${stateDir}/active-response
     install -d -m 1770 -o root -g ${wazuhGroup} ${stateDir}/active-response/bin
     # Keep the directory inode, because it is a writable mount point in a
-    # running execd namespace, but keep no entry inside it. In particular, an
-    # attacker-staged symlink would resolve onto an executable store inode and
-    # must not persist across activation.
-    find ${stateDir}/active-response/bin -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    # running execd namespace, but keep no entry of the host inside it. In
+    # particular, an attacker-staged symlink would resolve onto an executable
+    # store inode and must not persist across activation.
+    #
+    # An entry that is not a response of the package is removed. A response
+    # of the package is replaced by rename, so execd never finds it absent,
+    # and whatever held that name before is gone when the loop ends. The two
+    # restart responses are unsupported and count as entries of the host.
+    is_response() {
+      case "$1" in
+        restart-wazuh | restart.sh) return 1 ;;
+      esac
+      [ -e ${pkg}/active-response/bin/"$1" ]
+    }
+    find ${stateDir}/active-response/bin -mindepth 1 -maxdepth 1 -print0 |
+      while IFS= read -r -d "" existing; do
+        if ! is_response "$(basename "$existing")"; then
+          rm -rf "$existing"
+        fi
+      done
     for entry in ${pkg}/active-response/bin/*; do
       [ -e "$entry" ] || continue
       name="$(basename "$entry")"
-      rm -rf ${stateDir}/active-response/bin/"$name"
-      ln -s "$entry" ${stateDir}/active-response/bin/"$name"
+      if is_response "$name"; then
+        replace_link "$entry" ${stateDir}/active-response/bin/"$name"
+      fi
     done
-    rm -f ${stateDir}/active-response/bin/restart-wazuh \
-      ${stateDir}/active-response/bin/restart.sh
 
     # etc is mixed. Its directory is sticky and root-owned; mutable host files
     # belong to wazuh, while package files and generated ossec.conf are store
@@ -182,8 +213,7 @@ let
         ${concatStringsSep " | " hostOwnedEtc}) ;;
         *)
           name="$(basename "$entry")"
-          rm -rf ${stateDir}/etc/"$name"
-          ln -s "$entry" ${stateDir}/etc/"$name"
+          replace_link "$entry" ${stateDir}/etc/"$name"
           ;;
       esac
     done
@@ -192,8 +222,7 @@ let
     # otherwise state. inst-functions.sh reinstalls it on every upgrade too.
     if [ -f ${pkg}/queue/syscollector/norm_config.json ]; then
       install -d -m 0750 -o ${wazuhUser} -g ${wazuhGroup} ${stateDir}/queue/syscollector
-      rm -f ${stateDir}/queue/syscollector/norm_config.json
-      ln -s ${pkg}/queue/syscollector/norm_config.json \
+      replace_link ${pkg}/queue/syscollector/norm_config.json \
         ${stateDir}/queue/syscollector/norm_config.json
     fi
 
@@ -201,8 +230,7 @@ let
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type d -exec chmod 750 {} +
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type f -exec chmod 640 {} +
 
-    rm -f ${stateDir}/etc/ossec.conf
-    ln -s ${generatedConfig} ${stateDir}/etc/ossec.conf
+    replace_link ${generatedConfig} ${stateDir}/etc/ossec.conf
 
     ${optionalString (cfg.agentAuthPasswordFile != null) ''
       # PID 1 reads the configured source before this service changes to the
