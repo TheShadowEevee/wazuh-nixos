@@ -278,7 +278,8 @@ let
       }
 
       live=0
-      for name in ${concatMapStringsSep " " escapeShellArg (attrNames cfg.api.users)}; do
+      names=( ${concatMapStringsSep " " escapeShellArg (attrNames cfg.api.users)} )
+    for name in "''${names[@]}"; do
         rc=0
         probe "$name" || rc=$?
         case $rc in
