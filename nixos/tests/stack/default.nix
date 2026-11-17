@@ -25,12 +25,29 @@
 # the indexer takes 215 s to start and 395 s to security-ready, and the API
 # took 350 s to listen with four VM tests on the builder. Four VMs here
 # need about 9 GB: 3 GB indexer, 3 GB server, 2 GB dashboard, 1 GB agent.
+#
+# plant: null for the check. A name from plants below builds the same test
+# with one gap planted, to show that a subtest fails on it. See
+# nixos/tests/indexer/default.nix.
 {
   pkgs,
   wazuhModule,
   wazuhServerModule,
+  plant ? null,
 }:
 let
+  inherit (pkgs) lib;
+  # Each plant breaks one property that one subtest asserts.
+  plants = {
+    # Something at boot empties client.keys on the server, the way a setup
+    # step that rewrites etc would.
+    keys.systemd.services.plant-reset-client-keys = {
+      wantedBy = [ "multi-user.target" ];
+      before = [ "wazuh-server-setup.service" ];
+      serviceConfig.Type = "oneshot";
+      script = "if [ -s /var/ossec/etc/client.keys ]; then : > /var/ossec/etc/client.keys; fi";
+    };
+  };
   pki = import ../common/pki.nix { inherit pkgs; };
   fixture = import ../indexer/fixture.nix { inherit pkgs pki; };
   dashboardPackage = pkgs.callPackage ../../../pkgs/wazuh-dashboard { };
@@ -79,8 +96,9 @@ let
     "wazuh-modulesd"
   ];
 in
+assert plant == null || plants ? ${plant};
 pkgs.testers.runNixOSTest {
-  name = "wazuh-stack";
+  name = "wazuh-stack" + lib.optionalString (plant != null) "-plant-${plant}";
 
   nodes.indexer = {
     imports = [ fixture.module ];
@@ -93,7 +111,7 @@ pkgs.testers.runNixOSTest {
   nodes.server =
     { pkgs, ... }:
     {
-      imports = [ wazuhServerModule ];
+      imports = [ wazuhServerModule ] ++ lib.optional (plant != null) plants.${plant};
 
       virtualisation.memorySize = 3072;
       virtualisation.diskSize = 4096;
@@ -511,6 +529,64 @@ pkgs.testers.runNixOSTest {
             )
         except Exception:
             dashboard_state()
+            server_state()
+            raise
+
+    # After the last subtest that needs the dashboard, so a slow server boot
+    # cannot hide a result above.
+    with subtest("after a server reboot the agent reconnects with the same key and a new alert reaches the indexer"):
+        token = "wazuh-stack-reboot-probe"
+        query = shlex.quote(json.dumps({
+            "query": {
+                "bool": {
+                    "must": [
+                        {"match": {"agent.name": "example-agent"}},
+                        {"match_phrase": {"full_log": token}},
+                    ]
+                }
+            }
+        }))
+        try:
+            server_key = server.succeed("grep ' example-agent ' /var/ossec/etc/client.keys").strip()
+            agent_key = agent.succeed("cat /var/ossec/etc/client.keys").strip()
+            # Same line format on both sides: id, name, address, key.
+            assert server_key.split()[3] == agent_key.split()[3], (server_key, agent_key)
+            # Mark the agent journal before the shutdown. Every older
+            # "Connected" line is from the first connection.
+            shown = agent.succeed("journalctl -u wazuh-agentd -n 1 --show-cursor").strip().splitlines()[-1]
+            assert shown.startswith("-- cursor: "), shown
+            cursor = shown.removeprefix("-- cursor: ")
+
+            server.shutdown()
+            server.start()
+            server.wait_for_unit("multi-user.target", timeout=900)
+            server.wait_for_open_port(1514, timeout=900)
+            agent.wait_until_succeeds(
+                f"journalctl -u wazuh-agentd --after-cursor '{cursor}' | grep -q '(4102): Connected to the server'",
+                timeout=900,
+            )
+            # The server kept the key, and the agent did not enroll again.
+            assert server.succeed("grep ' example-agent ' /var/ossec/etc/client.keys").strip() == server_key
+            assert agent.succeed("cat /var/ossec/etc/client.keys").strip() == agent_key
+
+            agent.succeed(
+                "systemd-cat --identifier=sshd"
+                f" echo 'Failed password for {token} from 192.0.2.10 port 4242 ssh2'"
+            )
+            server.wait_until_succeeds(
+                f"grep -q -F '{token}' /var/ossec/logs/alerts/alerts.json", timeout=600
+            )
+            hit = json.loads(indexer.wait_until_succeeds(
+                indexer_curl + " -H 'Content-Type: application/json'"
+                + f" 'https://indexer:9200/wazuh-alerts-*/_search' -d {query}"
+                + " | jq -e 'select(.hits.total.value >= 1) | .hits.hits[0]'",
+                timeout=900,
+            ))
+            assert token in hit["_source"]["full_log"], hit["_source"]["full_log"]
+            assert hit["_source"]["agent"]["name"] == "example-agent", hit["_source"]["agent"]
+            server.succeed("test -z \"$(systemctl list-units --state=failed --no-legend 'wazuh-*')\"")
+        except Exception:
+            agent_state()
             server_state()
             raise
   '';
