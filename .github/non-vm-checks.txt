@@ -4,3 +4,4 @@ options-documented
 component-evaluation
 component-rendering
 agent-eval
+upgrade-script

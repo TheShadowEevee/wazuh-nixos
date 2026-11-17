@@ -228,7 +228,9 @@ restore() {
 	fi
 }
 armed=1
-trap 'rc=$?; if [ "${rc}" != 0 ] && [ "${armed}" = 1 ]; then restore; fi' EXIT
+# A failed step leaves with 1, whatever the code of the command that failed.
+# Code 2 from a child must not read as bad usage.
+trap 'rc=$?; if [ "${rc}" != 0 ] && [ "${armed}" = 1 ]; then restore; exit 1; fi' EXIT
 trap 'say "interrupted."; exit 1' INT TERM
 
 say "moving from ${current} to ${target}."
