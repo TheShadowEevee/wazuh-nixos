@@ -692,6 +692,9 @@ pkgs.testers.runNixOSTest {
             assert got == "", f"{daemon} holds {got!r} with active response off"
 
     with subtest("active response on grants execd exactly what it needs"):
+        # The first command starts this VM. Its boot time is not part of
+        # the 120 s below.
+        responder.wait_for_unit("multi-user.target")
         responder.wait_for_file("/var/ossec/etc/ossec.conf", timeout=120)
 
         responder.succeed(
@@ -955,6 +958,9 @@ pkgs.testers.runNixOSTest {
         # because the only response enabled is the one that needs a binary
         # and not a privilege. This is what makes the grant subtractive
         # rather than all-or-nothing.
+        # The first command starts this VM. Its boot time is not part of
+        # the 120 s below.
+        notifier.wait_for_unit("multi-user.target")
         notifier.wait_for_file("/var/ossec/etc/ossec.conf", timeout=120)
         notifier.succeed("systemctl cat wazuh-execd.service >/dev/null")
 
@@ -979,6 +985,9 @@ pkgs.testers.runNixOSTest {
         notifier.fail("test -e /etc/hosts.deny")
 
     with subtest("only disable-account escalates, and only execd"):
+        # The first command starts this VM. Its boot time is not part of
+        # the 120 s below.
+        disabler.wait_for_unit("multi-user.target")
         disabler.wait_for_file("/var/ossec/etc/ossec.conf", timeout=120)
 
         # shadow reads the real UID, so this response is unreachable without
