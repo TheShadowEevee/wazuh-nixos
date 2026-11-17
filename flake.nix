@@ -100,6 +100,10 @@
         checks.agent = import ./nixos/tests/agent/agent.nix {
           inherit pkgs wazuhModule;
         };
+        # The agent module assertions, by evaluation. No VM and no package build.
+        checks.agent-eval = import ./nixos/tests/agent/eval.nix {
+          inherit pkgs nixpkgs wazuhModule;
+        };
 
         # Fast component checks do not import release package derivations.
         checks.component-evaluation = import ./nixos/tests/indexer/evaluation.nix {
