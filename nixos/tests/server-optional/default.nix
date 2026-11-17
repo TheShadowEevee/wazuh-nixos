@@ -9,8 +9,8 @@
 # a local UDP receiver. Every daemon, monitord included, accepts the
 # generated configuration with its <reports> block (-t).
 #
-# It does not wait for a daily report, which monitord sends after
-# midnight, and it does not run the sendmail mode of maild.
+# The clock crosses midnight to exercise the real monitord report path.
+# The sendmail mode of maild is not exercised.
 {
   pkgs,
   wazuhServerModule,
@@ -69,6 +69,7 @@ pkgs.testers.runNixOSTest {
       virtualisation.memorySize = 3072;
       virtualisation.diskSize = 4096;
 
+      services.timesyncd.enable = false;
       services.wazuh-server = {
         enable = true;
         email = {
@@ -89,6 +90,7 @@ pkgs.testers.runNixOSTest {
         reports = [
           {
             title = "Daily authentication report";
+            showLogs = true;
             group = "authentication_failed";
             emailTo = [ "soc@example.com" ];
           }
@@ -157,6 +159,22 @@ pkgs.testers.runNixOSTest {
         server.succeed("grep -q 'RCPT .*oncall@example.com' /var/lib/receivers/mail")
         server.succeed("grep -q 'From: .*wazuh@example.com' /var/lib/receivers/mail")
         server.succeed("grep -q '\"id\":\"5710\"' /var/lib/receivers/syslog")
+
+    with subtest("monitord delivers the daily report over SMTP"):
+        server.wait_for_unit("wazuh-monitord.service")
+        # Earlier events are real analysisd alerts. Cross the day boundary
+        # after monitord has initialized its date, without waiting a day.
+        server.succeed("date -s 'tomorrow 00:01:00'")
+        server.wait_until_succeeds(
+            "grep -q 'Subject: Daily authentication report' /var/lib/receivers/mail",
+            timeout=180,
+        )
+        mail = server.succeed("cat /var/lib/receivers/mail")
+        reports = [message for message in mail.split("\n.\n")
+                   if "Subject: Daily authentication report" in message]
+        assert reports, mail
+        assert any("RCPT soc@example.com" in report and "192.168.1.77" in report
+                   and "5710" in report for report in reports), reports
 
     with subtest("nothing died"):
         for unit in ["wazuh-maild", "wazuh-csyslogd", "wazuh-analysisd", "wazuh-monitord"]:
