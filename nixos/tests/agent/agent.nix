@@ -268,11 +268,11 @@ pkgs.testers.runNixOSTest {
         # Patch 10. agent-auth read its receive timeout from memory that
         # nothing had set, and in CI the value was 1 second. A manager that
         # answered later kept the registration and the agent got no key.
-        # The listener here accepts the connection and never answers, so the
+        # The listener here (socat -u) reads and never answers, so the
         # TLS handshake cannot complete. `timeout` must be what stops
         # agent-auth (exit 124). An exit before that is the old behavior.
         agent.succeed(
-            "systemd-run --unit=silent-authd socat TCP-LISTEN:1599,fork,reuseaddr EXEC:'sleep 600'"
+            "systemd-run --unit=silent-authd $(command -v socat) -u TCP-LISTEN:1599,fork,reuseaddr OPEN:/dev/null"
         )
         agent.wait_for_open_port(1599)
         auth = agent.succeed(
