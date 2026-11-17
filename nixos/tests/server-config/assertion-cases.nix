@@ -9,7 +9,7 @@ let
 in
 [
   (case "cannot be enabled on the same host" { _agent = true; })
-  (case "integrationScripts keys must" { integrationScripts.bad = "exit 0"; })
+  (case "integrationScripts keys must" { integrationScripts.bad = "/run/custom-script"; })
   (case "Each custom integration needs" { integrations.test.name = "custom-missing"; })
   (case "RIDS timing and allowHigherVersions" { remote.listeners = [ (syslog // { ridsClosingTime = "5s"; }) ]; })
   (case "at most one secure listener" { remote.listeners = [ { connection = "secure"; port = 1514; } { connection = "secure"; port = 1517; } ]; })
