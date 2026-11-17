@@ -1,5 +1,5 @@
 diff --git a/src/data_provider/src/packages/packageLinuxDataRetriever.h b/src/data_provider/src/packages/packageLinuxDataRetriever.h
-index 12e6c8fc24..f4bd868c03 100644
+index 12e6c8f..f4bd868 100644
 --- a/src/data_provider/src/packages/packageLinuxDataRetriever.h
 +++ b/src/data_provider/src/packages/packageLinuxDataRetriever.h
 @@ -71,6 +71,16 @@ void getApkInfo(const std::string& libPath, std::function<void(nlohmann::json&)>
@@ -33,7 +33,7 @@ index 12e6c8fc24..f4bd868c03 100644
          static void getPythonPackages(std::unordered_set<std::string>& pythonPackages)
 diff --git a/src/data_provider/src/packages/packageLinuxNixParserHelper.h b/src/data_provider/src/packages/packageLinuxNixParserHelper.h
 new file mode 100644
-index 0000000000..466c3e7e58
+index 0000000..466c3e7
 --- /dev/null
 +++ b/src/data_provider/src/packages/packageLinuxNixParserHelper.h
 @@ -0,0 +1,404 @@
@@ -443,7 +443,7 @@ index 0000000000..466c3e7e58
 +#endif // _PACKAGE_LINUX_NIX_PARSER_HELPER_H
 diff --git a/src/data_provider/src/packages/packageLinuxParserNix.cpp b/src/data_provider/src/packages/packageLinuxParserNix.cpp
 new file mode 100644
-index 0000000000..948f2cac9e
+index 0000000..948f2ca
 --- /dev/null
 +++ b/src/data_provider/src/packages/packageLinuxParserNix.cpp
 @@ -0,0 +1,74 @@
@@ -522,10 +522,10 @@ index 0000000000..948f2cac9e
 +    }
 +}
 diff --git a/src/data_provider/src/sharedDefs.h b/src/data_provider/src/sharedDefs.h
-index d6c77b16f3..9ccd473d7c 100644
+index d270353..c63fcb4 100644
 --- a/src/data_provider/src/sharedDefs.h
 +++ b/src/data_provider/src/sharedDefs.h
-@@ -38,6 +38,18 @@ constexpr auto APK_PATH {"/lib/apk/db"};
+@@ -39,6 +39,18 @@ constexpr auto APK_PATH {"/lib/apk/db"};
  constexpr auto APK_DB_PATH {"/lib/apk/db/installed"};
  constexpr auto SNAP_PATH {"/var/lib/snapd"};
  
@@ -542,10 +542,10 @@ index d6c77b16f3..9ccd473d7c 100644
 +constexpr auto NIX_CPE_MAP_PATH {"queue/syscollector/nix-cpe-map"};
 +
  constexpr auto UNKNOWN_VALUE {" "};
- constexpr auto MAC_ADDRESS_COUNT_SEGMENTS
- {
+ 
+ // Package metadata files (PyPI METADATA/PKG-INFO, npm package.json) larger than this are skipped
 diff --git a/src/data_provider/tests/sysInfoPackagesLinuxHelper/sysInfoPackagesLinuxHelper_test.cpp b/src/data_provider/tests/sysInfoPackagesLinuxHelper/sysInfoPackagesLinuxHelper_test.cpp
-index 00316067d2..0d4c111775 100644
+index 0031606..0d4c111 100644
 --- a/src/data_provider/tests/sysInfoPackagesLinuxHelper/sysInfoPackagesLinuxHelper_test.cpp
 +++ b/src/data_provider/tests/sysInfoPackagesLinuxHelper/sysInfoPackagesLinuxHelper_test.cpp
 @@ -15,6 +15,9 @@

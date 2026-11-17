@@ -8,8 +8,8 @@
 # manager's archive.
 #
 # It needs the manager container image, which comes from Docker Hub. The pin
-# lives in nixos/tests/wazuh-manager-image.<arch>.json, written by
-# nixos/tests/prefetch-manager-image.sh. checks.agent needs no manager and
+# lives in nixos/tests/common/wazuh-manager-image.<arch>.json, written by
+# nixos/tests/common/prefetch-manager-image.sh. checks.agent needs no manager and
 # stays fast.
 {
   pkgs,
@@ -19,7 +19,7 @@ pkgs.testers.runNixOSTest {
   name = "wazuh-agent-enrollment";
 
   nodes.manager = {
-    imports = [ ./manager-node.nix ];
+    imports = [ ../common/manager-node.nix ];
   };
 
   nodes.agent =
@@ -136,6 +136,24 @@ pkgs.testers.runNixOSTest {
             )
             manager_state()
             raise
+
+    with subtest("a key from wazuh-agentd counts as an enrollment"):
+        # wazuh-agentd enrolls by itself when it starts with no key. If the
+        # unit failed first, the agent has a key and no marker. Reproduce that
+        # state: remove the marker and keep the key. The unit must then skip,
+        # write the marker again, and not ask authd for the same name. Before
+        # the ExecCondition, this restart failed with "Duplicate agent name".
+        agent.succeed("rm -f /var/ossec/var/.agent-registered")
+        agent.succeed("systemctl restart wazuh-agent-auth.service")
+        agent.succeed("test -e /var/ossec/var/.agent-registered")
+        agent.succeed("test -s /var/ossec/etc/client.keys")
+        agent.fail(
+            "journalctl -u wazuh-agent-auth.service | grep -q 'Duplicate agent name'"
+        )
+        manager.succeed(
+            "test $(docker exec wazuh-manager"
+            " grep -c ' example-agent ' /var/ossec/etc/client.keys) = 1"
+        )
 
     with subtest("the agent connects to remoted"):
         # The daemons started before a key existed. Restart them by name:

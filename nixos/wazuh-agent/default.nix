@@ -1619,6 +1619,22 @@ in
               fi
               touch ${stateDir}/var/.agent-registered
             '';
+
+            # wazuh-agentd enrolls by itself when it starts with no key. If
+            # this unit failed first (for example, authd refused one
+            # connection), agentd gets the key and no marker exists. A second
+            # agent-auth then asks for the same name, and the manager answers
+            # "Duplicate agent name". So a key that exists counts as an
+            # enrollment: write the marker and skip. ExecCondition exit 1
+            # skips the unit and does not mark it failed.
+            skipWhenKeyed = pkgs.writeShellScript "wazuh-skip-when-keyed" ''
+              if [ -s ${stateDir}/etc/client.keys ]; then
+                echo "wazuh-agent-auth: ${stateDir}/etc/client.keys has a key. No new enrollment." >&2
+                touch ${stateDir}/var/.agent-registered
+                exit 1
+              fi
+              exit 0
+            '';
           in
           hardening
           // {
@@ -1633,6 +1649,7 @@ in
               "${pkg}/bin/agent-auth -m ${host} -p ${toString cfg.registration.port}"
               + optionalString (certFlags != "") " ${certFlags}"
               + optionalString (identityFlags != "") " ${identityFlags}";
+            ExecCondition = "${skipWhenKeyed}";
             ExecStartPost = "${markRegistered}";
           };
       };

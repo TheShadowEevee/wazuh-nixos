@@ -1,0 +1,59 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Wazuh: upgrade to a new version",
+            "detail": "Run scripts/upgrade-wazuh.sh in the dev shell. It moves every pin and hash to the version that you enter.",
+            "type": "shell",
+            "command": "nix",
+            "args": [
+                "develop",
+                "--command",
+                "./scripts/upgrade-wazuh.sh",
+                "${input:wazuhVersion}",
+                "--package-revision",
+                "${input:wazuhPackageRevision}",
+                "${input:wazuhManagerImage}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "wazuhVersion",
+            "type": "promptString",
+            "description": "Wazuh version without the v, for example 4.14.10. Enter latest for the newest release.",
+            "default": "latest"
+        },
+        {
+            "id": "wazuhPackageRevision",
+            "type": "promptString",
+            "description": "Debian revision of the indexer and dashboard packages.",
+            "default": "1"
+        },
+        {
+            "id": "wazuhManagerImage",
+            "type": "pickString",
+            "description": "Pin a new wazuh/wazuh-manager image for checks.enrollment? The image is several GB.",
+            "options": [
+                {
+                    "label": "Pin the manager image",
+                    "value": "--pin-manager-image"
+                },
+                {
+                    "label": "Skip the manager image",
+                    "value": "--skip-manager-image"
+                }
+            ],
+            "default": "--pin-manager-image"
+        }
+    ]
+}

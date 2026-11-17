@@ -8,7 +8,7 @@
 # prefetch-manager-image.sh and committed. Nothing in this file is edited by
 # hand.
 #
-# Keep `version` in step with `version` in pkgs/wazuh-agent.nix. Wazuh supports
+# Keep `version` in step with `version` in pkgs/common/default.nix. Wazuh supports
 # an agent older than its manager. It does not support an agent newer than its
 # manager, so a stale pin fails in a way that looks like a module bug. The
 # check below compares the two rather than trust them to match.
@@ -18,7 +18,7 @@
   go,
 }:
 let
-  version = "4.14.7";
+  version = "4.14.10";
   imageName = "wazuh/wazuh-manager";
 
   # dockerTools.pullImage defaults its `arch` to go.GOARCH, so the pin must be
@@ -31,14 +31,14 @@ let
   havePin = builtins.pathExists pinFile;
   pin = builtins.fromJSON (builtins.readFile pinFile);
 
-  regenerate = "./nixos/tests/prefetch-manager-image.sh ${version} ${arch}";
+  regenerate = "./nixos/tests/common/prefetch-manager-image.sh ${version} ${arch}";
 
   # Read through `or null` so that a truncated or hand-edited file reports the
   # mismatch rather than an attribute error.
   problem =
     if !havePin then
       ''
-        nixos/tests/wazuh-manager-image.nix has no pin for ${arch}.
+        nixos/tests/common/wazuh-manager-image.nix has no pin for ${arch}.
 
         The enrollment check needs the ${imageName}:${version} image from
         Docker Hub. Nix cannot fetch it without a manifest digest and a hash,
@@ -54,14 +54,14 @@ let
       ''
     else if (pin.imageName or null) != imageName then
       ''
-        nixos/tests/${pinName} pins ${pin.imageName or "nothing"},
+        nixos/tests/common/${pinName} pins ${pin.imageName or "nothing"},
         but this file expects ${imageName}. Regenerate the pin:
 
           ${regenerate}
       ''
     else if (pin.finalImageTag or null) != version then
       ''
-        nixos/tests/${pinName} pins ${imageName}:${pin.finalImageTag or "nothing"},
+        nixos/tests/common/${pinName} pins ${imageName}:${pin.finalImageTag or "nothing"},
         but this file expects ${version}.
 
         An agent newer than its manager is not a supported combination, so a

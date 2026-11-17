@@ -1,10 +1,22 @@
 diff --git a/src/active-response/active_responses.c b/src/active-response/active_responses.c
-index 889ca05..a98b7e2 100644
+index 22ac3de..85c27bd 100644
 --- a/src/active-response/active_responses.c
 +++ b/src/active-response/active_responses.c
-@@ -609 +609 @@ int lock(const char *lock_path, const char *lock_pid_path, const char *log_path,
+@@ -647,7 +647,7 @@ int lock(const char *lock_path, const char *lock_pid_path, const char *log_path,
+         FILE *pid_file;
+         int current_pid = -1;
+ 
 -        if (mkdir(lock_path, S_IRWXG) == 0) {
 +        if (mkdir(lock_path, S_IRWXU) == 0) {
-@@ -712 +712 @@ int lock(const char *lock_path, const char *lock_pid_path, const char *log_path,
+             // Lock acquired (setting the pid)
+             pid_t pid = getpid();
+             if (pid_file = wfopen(lock_pid_path, "w"), !pid_file) {
+@@ -750,7 +750,7 @@ int lock(const char *lock_path, const char *lock_pid_path, const char *log_path,
+                 unlock(lock_path, log_path);
+ 
+                 // Try take lock again
 -                if (mkdir(lock_path, S_IRWXG) == 0) {
 +                if (mkdir(lock_path, S_IRWXU) == 0) {
+                     // Lock acquired (setting the pid)
+                     pid_t pid = getpid();
+                     pid_file = wfopen(lock_pid_path, "w");
