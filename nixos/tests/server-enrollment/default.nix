@@ -151,6 +151,11 @@ pkgs.testers.runNixOSTest {
             "journalctl -u wazuh-agent-auth -u wazuh-agentd --no-pager | tail -n 60",
             "cat /var/ossec/var/run/wazuh-agentd.state",
             "cat /var/ossec/etc/client.keys",
+            "cat /var/ossec/etc/shared/ar.conf",
+            "cat /var/ossec/logs/active-responses.log",
+            "tail -n 80 /var/ossec/logs/ossec.log",
+            "journalctl -u wazuh-execd --no-pager | tail -n 60",
+            "iptables -S",
         ]:
             agent.log(f"--- agent: {command}")
             agent.log(agent.execute(command)[1])
@@ -257,6 +262,11 @@ pkgs.testers.runNixOSTest {
         # the line, so the alert names it with sshd as the parent. "Failed
         # password" matches rule 5716 and then 5760, both level 5, above
         # the alert level of 3.
+        # ar.conf arrives asynchronously after enrollment. An event sent
+        # before the command is known is discarded by execd, not replayed.
+        agent.wait_until_succeeds(
+            "grep -q firewall-drop /var/ossec/etc/shared/ar.conf", timeout=180
+        )
         agent.fail("iptables -C INPUT -s 192.0.2.10 -j DROP")
         token = "wazuh-server-enrollment-alert-probe"
         agent.succeed(
@@ -281,11 +291,16 @@ pkgs.testers.runNixOSTest {
         # The sshd event above fires rule 5760 on the manager; execd must
         # execute the manager's response on the originating agent.
         agent.wait_for_unit("wazuh-execd.service")
-        agent.wait_until_succeeds(
-            "iptables -C INPUT -s 192.0.2.10 -j DROP", timeout=60
-        )
-        agent.succeed("iptables -C FORWARD -s 192.0.2.10 -j DROP")
-        agent.succeed("grep 'firewall-drop' /var/ossec/logs/active-responses.log | grep -q 192.0.2.10")
+        try:
+            agent.wait_until_succeeds(
+                "iptables -C INPUT -s 192.0.2.10 -j DROP", timeout=60
+            )
+            agent.succeed("iptables -C FORWARD -s 192.0.2.10 -j DROP")
+            agent.succeed("grep 'firewall-drop' /var/ossec/logs/active-responses.log | grep -q 192.0.2.10")
+        except Exception:
+            agent_state()
+            server_state()
+            raise
 
     with subtest("keys, API users and agent groups survive server reboot"):
         import json
