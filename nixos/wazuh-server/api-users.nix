@@ -279,7 +279,7 @@ let
 
       live=0
       names=( ${concatMapStringsSep " " escapeShellArg (attrNames cfg.api.users)} )
-    for name in "''${names[@]}"; do
+      for name in "''${names[@]}"; do
         rc=0
         probe "$name" || rc=$?
         case $rc in
