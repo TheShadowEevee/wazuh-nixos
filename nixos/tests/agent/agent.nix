@@ -46,6 +46,8 @@ pkgs.testers.runNixOSTest {
       environment.systemPackages = [
         pkgs.jq
         pkgs.sqlite
+        # The enrollment timeout subtest needs a listener that never answers.
+        pkgs.socat
       ];
     };
 
@@ -261,6 +263,29 @@ pkgs.testers.runNixOSTest {
         agent.succeed("grep -qx test-enrollment-password /var/ossec/etc/authd.pass")
         agent.succeed("test $(stat -c %U:%G /var/ossec/etc/authd.pass) = wazuh:wazuh")
         agent.succeed("test $(stat -c %a /var/ossec/etc/authd.pass) = 640")
+
+    with subtest("agent-auth waits for a slow manager"):
+        # Patch 10. agent-auth read its receive timeout from memory that
+        # nothing had set, and in CI the value was 1 second. A manager that
+        # answered later kept the registration and the agent got no key.
+        # The listener here accepts the connection and never answers, so the
+        # TLS handshake cannot complete. `timeout` must be what stops
+        # agent-auth (exit 124). An exit before that is the old behavior.
+        agent.succeed(
+            "systemd-run --unit=silent-authd socat TCP-LISTEN:1599,fork,reuseaddr EXEC:'sleep 600'"
+        )
+        agent.wait_for_open_port(1599)
+        auth = agent.succeed(
+            "grep -o '/nix/store/[^ ]*/bin/agent-auth' /etc/systemd/system/wazuh-agent-auth.service | head -1"
+        ).strip()
+        status, out = agent.execute(
+            "runuser -u wazuh -- env WAZUH_HOME=/var/ossec timeout 10"
+            f" {auth} -m 127.0.0.1 -p 1599 2>&1"
+        )
+        agent.log(out)
+        assert "Requesting a key from server" in out, f"agent-auth did not start: {out!r}"
+        assert status == 124, f"agent-auth stopped before 10 s (exit {status}): {out!r}"
+        agent.succeed("systemctl stop silent-authd.service")
 
     with subtest("no daemon is reachable through a setuid wrapper"):
         for daemon in daemons:
