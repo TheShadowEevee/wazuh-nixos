@@ -293,7 +293,11 @@ pkgs.testers.runNixOSTest {
         # The direct evidence: the timeout that agent-auth gives the kernel.
         timeouts = [l for l in out.splitlines() if "SO_RCVTIMEO" in l]
         assert timeouts, f"agent-auth set no receive timeout: {out!r}"
-        assert all("tv_sec=60," in l for l in timeouts), f"receive timeout is not 60 s: {timeouts!r}"
+        # strace prints the timeval as bytes: 8 for the seconds and 8 for the
+        # microseconds, little-endian. 60 is "<". The unpatched package gave
+        # "!" here, which is 33, a value that nothing in the source sets.
+        want = '"<' + r"\0" * 15 + '"'
+        assert all(want in l for l in timeouts), f"receive timeout is not 60 s: {timeouts!r}"
         assert status == 124, f"agent-auth stopped before 10 s (exit {status}): {out!r}"
         agent.succeed("systemctl stop silent-authd.service")
 
