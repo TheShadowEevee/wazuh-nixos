@@ -14,11 +14,18 @@ let
       system = pkgs.stdenv.hostPlatform.system;
       modules = [
         wazuhServerModule
+        ({ lib, ... }: {
+          options.services.wazuh-agent.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+          };
+          config.services.wazuh-agent.enable = options._agent or false;
+        })
         {
           services.wazuh-server = {
             enable = true;
           }
-          // options;
+          // builtins.removeAttrs options [ "_agent" ];
           boot.loader.grub.enable = false;
           fileSystems."/" = {
             device = "none";
@@ -28,6 +35,16 @@ let
         }
       ];
     }).config;
+  assertionCases = import ./assertion-cases.nix;
+  checksAssertion =
+    case:
+    let
+      assertions = (hostConfig case.options).assertions;
+    in
+    if lib.any (a: !a.assertion && lib.hasInfix case.diagnostic a.message) assertions then
+      true
+    else
+      throw "Missing expected assertion: ${case.diagnostic}";
   rejected = settings: lib.any (a: !a.assertion) (hostConfig { inherit settings; }).assertions;
   references =
     overrides:
@@ -82,6 +99,8 @@ let
     };
   };
 in
+assert lib.all checksAssertion assertionCases;
+assert lib.all (a: a.assertion) (hostConfig { }).assertions;
 assert
   xml.render {
     a = [

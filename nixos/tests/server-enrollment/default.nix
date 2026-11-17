@@ -69,11 +69,31 @@ pkgs.testers.runNixOSTest {
         # or not a rule matches. Without it the archive probe below would be
         # discarded and prove nothing.
         logAll = true;
+        settings.command = [
+          {
+            name = "firewall-drop";
+            executable = "firewall-drop";
+            timeout_allowed = true;
+          }
+        ];
+        settings.active-response = [
+          {
+            command = "firewall-drop";
+            location = "local";
+            rules_id = "5760";
+            timeout = 120;
+          }
+        ];
+        api.users.wazuh.passwordFile = "/run/secrets/api-password";
       };
 
-      systemd.tmpfiles.rules = [ passwordRule ];
+      systemd.tmpfiles.rules = [
+        passwordRule
+        "f /run/secrets/api-password 0400 root root - Persistence-Test42!"
+      ];
 
       environment.systemPackages = [
+        pkgs.curl
         pkgs.jq
         pkgs.iproute2
       ];
@@ -84,8 +104,10 @@ pkgs.testers.runNixOSTest {
     {
       imports = [ wazuhModule ];
 
+      environment.systemPackages = [ pkgs.iptables ];
       services.wazuh-agent = {
         enable = true;
+        activeResponse.enable = true;
 
         # The hostname, because the server certificate names it. See the
         # header comment for why that needs the server to listen on IPv6.
@@ -235,6 +257,7 @@ pkgs.testers.runNixOSTest {
         # the line, so the alert names it with sshd as the parent. "Failed
         # password" matches rule 5716 and then 5760, both level 5, above
         # the alert level of 3.
+        agent.fail("iptables -C INPUT -s 192.0.2.10 -j DROP")
         token = "wazuh-server-enrollment-alert-probe"
         agent.succeed(
             "systemd-cat --identifier=sshd"
@@ -253,6 +276,53 @@ pkgs.testers.runNixOSTest {
         except Exception:
             server_state()
             raise
+
+    with subtest("the server dispatches active response to the enrolled agent"):
+        # The sshd event above fires rule 5760 on the manager; execd must
+        # execute the manager's response on the originating agent.
+        agent.wait_for_unit("wazuh-execd.service")
+        agent.wait_until_succeeds(
+            "iptables -C INPUT -s 192.0.2.10 -j DROP", timeout=60
+        )
+        agent.succeed("iptables -C FORWARD -s 192.0.2.10 -j DROP")
+        agent.succeed("grep 'firewall-drop' /var/ossec/logs/active-responses.log | grep -q 192.0.2.10")
+
+    with subtest("keys, API users and agent groups survive server reboot"):
+        import json
+        server.wait_for_unit("wazuh-api-users.service")
+        base = "curl --fail --silent --show-error --cacert ${pki.ca}"
+        auth = "-u wazuh:Persistence-Test42! -X POST 'https://server:55000/security/user/authenticate?raw=true'"
+        token = server.succeed(base + " " + auth).strip()
+        api = base + f" -H 'Authorization: Bearer {token}'"
+        # A user created through the API is not recreated by declarative
+        # api.users at boot, so this detects loss of the RBAC database.
+        user = json.loads(server.succeed(api + " -H 'Content-Type: application/json' -X POST https://server:55000/security/users -d "
+            + "'" + json.dumps({"username": "persistent-api-user", "password": "User-Persistence42!"}) + "'"))
+        assert user["error"] == 0, user
+        created = json.loads(server.succeed(api + " -H 'Content-Type: application/json' -X POST https://server:55000/groups -d "
+            + "'" + json.dumps({"group_id": "persistent-test"}) + "'"))
+        assert created["error"] == 0, created
+        agent_id = server.succeed("awk '/ example-agent / {print $1}' /var/ossec/etc/client.keys").strip()
+        assigned = json.loads(server.succeed(api + f" -X PUT 'https://server:55000/agents/{agent_id}/group/persistent-test'"))
+        assert assigned["error"] == 0, assigned
+        keys = server.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        agent_keys = agent.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        server.shutdown()
+        server.start()
+        server.wait_for_unit("wazuh-api-users.service")
+        server.wait_for_unit("wazuh-remoted.service")
+        assert keys == server.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        assert agent_keys == agent.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        token = server.succeed(base + " " + auth).strip()
+        api = base + f" -H 'Authorization: Bearer {token}'"
+        server.succeed(base + " -u persistent-api-user:User-Persistence42! -X POST 'https://server:55000/security/user/authenticate?raw=true'")
+        group = json.loads(server.succeed(api + " 'https://server:55000/groups/persistent-test/agents'"))
+        assert group["error"] == 0, group
+        assert any(item["id"] == agent_id for item in group["data"]["affected_items"]), group
+        server.fail(base + " -u wazuh:wazuh -X POST 'https://server:55000/security/user/authenticate?raw=true'")
+        agent.wait_until_succeeds("grep -q \"^status='connected'\" /var/ossec/var/run/wazuh-agentd.state", timeout=240)
+        agent.succeed("systemd-cat --identifier=wazuh-probe echo post-reboot-persistence-probe")
+        server.wait_until_succeeds("grep -q post-reboot-persistence-probe /var/ossec/logs/archives/archives.json", timeout=300)
 
     with subtest("authd rejects an enrollment with a wrong password"):
         # The enrollments above supplied only the right password, so an

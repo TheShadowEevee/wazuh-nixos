@@ -97,7 +97,7 @@ let
       if cfg.api.tls != null then
         ''tls=(--cacert "$CREDENTIALS_DIRECTORY/api-cert")''
       else
-        ''tls=(--insecure)''
+        "tls=(--insecure)"
     }
     common=(--silent --show-error --max-time 30 "''${tls[@]}")
 
@@ -278,7 +278,8 @@ let
       }
 
       live=0
-      for name in ${concatMapStringsSep " " escapeShellArg (attrNames cfg.api.users)}; do
+      names=( ${concatMapStringsSep " " escapeShellArg (attrNames cfg.api.users)} )
+      for name in "''${names[@]}"; do
         rc=0
         probe "$name" || rc=$?
         case $rc in
@@ -425,11 +426,10 @@ in
         TimeoutStartSec = waitSeconds + 120;
         LoadCredential =
           certCredential
-          ++
-          mapAttrsToList (name: user: "${credentialName name}:${toString user.passwordFile}") cfg.api.users
-          ++ mapAttrsToList (name: user: "${defaultCredentialName name}:${toString user.defaultPasswordFile}") (
-            filterAttrs (_: user: user.defaultPasswordFile != null) cfg.api.users
-          );
+          ++ mapAttrsToList (name: user: "${credentialName name}:${toString user.passwordFile}") cfg.api.users
+          ++ mapAttrsToList (
+            name: user: "${defaultCredentialName name}:${toString user.defaultPasswordFile}"
+          ) (filterAttrs (_: user: user.defaultPasswordFile != null) cfg.api.users);
         ExecStart = "${script}/bin/wazuh-api-users";
       };
     };
