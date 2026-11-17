@@ -241,6 +241,7 @@ pkgs.testers.runNixOSTest {
         # the line, so the alert names it with sshd as the parent. "Failed
         # password" matches rule 5716 and then 5760, both level 5, above
         # the alert level of 3.
+        agent.fail("iptables -C INPUT -s 192.0.2.10 -j DROP")
         token = "wazuh-server-enrollment-alert-probe"
         agent.succeed(
             "systemd-cat --identifier=sshd"
@@ -277,6 +278,11 @@ pkgs.testers.runNixOSTest {
         auth = "-u wazuh:Persistence-Test42! -X POST 'https://server:55000/security/user/authenticate?raw=true'"
         token = server.succeed(base + " " + auth).strip()
         api = base + f" -H 'Authorization: Bearer {token}'"
+        # A user created through the API is not recreated by declarative
+        # api.users at boot, so this detects loss of the RBAC database.
+        user = json.loads(server.succeed(api + " -H 'Content-Type: application/json' -X POST https://server:55000/security/users -d "
+            + "'" + json.dumps({"username": "persistent-api-user", "password": "User-Persistence42!"}) + "'"))
+        assert user["error"] == 0, user
         created = json.loads(server.succeed(api + " -H 'Content-Type: application/json' -X POST https://server:55000/groups -d "
             + "'" + json.dumps({"group_id": "persistent-test"}) + "'"))
         assert created["error"] == 0, created
@@ -293,6 +299,7 @@ pkgs.testers.runNixOSTest {
         assert agent_keys == agent.succeed("sha256sum /var/ossec/etc/client.keys").strip()
         token = server.succeed(base + " " + auth).strip()
         api = base + f" -H 'Authorization: Bearer {token}'"
+        server.succeed(base + " -u persistent-api-user:User-Persistence42! -X POST 'https://server:55000/security/user/authenticate?raw=true'")
         group = json.loads(server.succeed(api + " 'https://server:55000/groups/persistent-test/agents'"))
         assert group["error"] == 0, group
         assert any(item["id"] == agent_id for item in group["data"]["affected_items"]), group
