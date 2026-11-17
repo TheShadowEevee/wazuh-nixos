@@ -48,6 +48,7 @@ pkgs.testers.runNixOSTest {
         pkgs.sqlite
         # The enrollment timeout subtest needs a listener that never answers.
         pkgs.socat
+        pkgs.strace
       ];
     };
 
@@ -275,15 +276,24 @@ pkgs.testers.runNixOSTest {
             "systemd-run --unit=silent-authd $(command -v socat) -u TCP-LISTEN:1599,fork,reuseaddr OPEN:/dev/null"
         )
         agent.wait_for_open_port(1599)
-        auth = agent.succeed(
-            "grep -o '/nix/store/[^ ]*/bin/agent-auth' /etc/systemd/system/wazuh-agent-auth.service | head -1"
+        # The command line of the unit, with the host and port replaced.
+        # The value in the unset field depended on what the process did
+        # before, so the test runs what the unit runs.
+        cmd = agent.succeed(
+            "sed -n 's/^ExecStart=//p' /etc/systemd/system/wazuh-agent-auth.service"
+            " | sed -E 's/ -m [^ ]+/ -m 127.0.0.1/; s/ -p [0-9]+/ -p 1599/'"
         ).strip()
+        assert "-m 127.0.0.1" in cmd and "-p 1599" in cmd, f"unexpected ExecStart: {cmd!r}"
         status, out = agent.execute(
             "runuser -u wazuh -- env WAZUH_HOME=/var/ossec timeout 10"
-            f" {auth} -m 127.0.0.1 -p 1599 2>&1"
+            f" strace -f -e trace=setsockopt {cmd} 2>&1"
         )
         agent.log(out)
         assert "Requesting a key from server" in out, f"agent-auth did not start: {out!r}"
+        # The direct evidence: the timeout that agent-auth gives the kernel.
+        timeouts = [l for l in out.splitlines() if "SO_RCVTIMEO" in l]
+        assert timeouts, f"agent-auth set no receive timeout: {out!r}"
+        assert all("tv_sec=60," in l for l in timeouts), f"receive timeout is not 60 s: {timeouts!r}"
         assert status == 124, f"agent-auth stopped before 10 s (exit {status}): {out!r}"
         agent.succeed("systemctl stop silent-authd.service")
 
