@@ -16,27 +16,30 @@
   wazuhServerModule,
 }:
 let
-  smtpReceiver = pkgs.writers.writePython3 "smtp-receiver" {
-    libraries = [ pkgs.python3Packages.aiosmtpd ];
-  } ''
-    import time
+  smtpReceiver =
+    pkgs.writers.writePython3 "smtp-receiver"
+      {
+        libraries = [ pkgs.python3Packages.aiosmtpd ];
+      }
+      ''
+        import time
 
-    from aiosmtpd.controller import Controller
-
-
-    class Save:
-        async def handle_DATA(self, server, session, envelope):
-            with open("/var/lib/receivers/mail", "ab") as f:
-                rcpt = ",".join(envelope.rcpt_tos).encode()
-                f.write(b"RCPT " + rcpt + b"\n")
-                f.write(envelope.content + b"\n.\n")
-            return "250 OK"
+        from aiosmtpd.controller import Controller
 
 
-    Controller(Save(), hostname="127.0.0.1", port=25).start()
-    while True:
-        time.sleep(3600)
-  '';
+        class Save:
+            async def handle_DATA(self, server, session, envelope):
+                with open("/var/lib/receivers/mail", "ab") as f:
+                    rcpt = ",".join(envelope.rcpt_tos).encode()
+                    f.write(b"RCPT " + rcpt + b"\n")
+                    f.write(envelope.content + b"\n.\n")
+                return "250 OK"
+
+
+        Controller(Save(), hostname="127.0.0.1", port=25).start()
+        while True:
+            time.sleep(3600)
+      '';
 
   syslogReceiver = pkgs.writers.writePython3 "syslog-receiver" { } ''
     import socket

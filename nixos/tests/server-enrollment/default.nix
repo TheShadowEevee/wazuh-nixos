@@ -69,12 +69,28 @@ pkgs.testers.runNixOSTest {
         # or not a rule matches. Without it the archive probe below would be
         # discarded and prove nothing.
         logAll = true;
-        settings.command = [{ name = "firewall-drop"; executable = "firewall-drop"; timeout_allowed = true; }];
-        settings.active-response = [{ command = "firewall-drop"; location = "local"; rules_id = "5760"; timeout = 120; }];
+        settings.command = [
+          {
+            name = "firewall-drop";
+            executable = "firewall-drop";
+            timeout_allowed = true;
+          }
+        ];
+        settings.active-response = [
+          {
+            command = "firewall-drop";
+            location = "local";
+            rules_id = "5760";
+            timeout = 120;
+          }
+        ];
         api.users.wazuh.passwordFile = "/run/secrets/api-password";
       };
 
-      systemd.tmpfiles.rules = [ passwordRule "f /run/secrets/api-password 0400 root root - Persistence-Test42!" ];
+      systemd.tmpfiles.rules = [
+        passwordRule
+        "f /run/secrets/api-password 0400 root root - Persistence-Test42!"
+      ];
 
       environment.systemPackages = [
         pkgs.curl
