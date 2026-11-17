@@ -75,6 +75,9 @@ pkgs.testers.runNixOSTest {
         registration.certFile = pkgs.writeText "test-agent.pem" "";
         registration.keyFile = pkgs.writeText "test-agent-key.pem" "";
       };
+
+      # The setup rerun subtest watches the state directory.
+      environment.systemPackages = [ pkgs.inotify-tools ];
     };
 
   # Active response on, but only the response that needs no capability. This
@@ -858,6 +861,53 @@ pkgs.testers.runNixOSTest {
         # relying on a child noexec mount over a store-link inode.
         responder.fail("test -e /var/ossec/active-response/bin/restart-wazuh")
         responder.fail("test -e /var/ossec/active-response/bin/restart.sh")
+
+    with subtest("a rerun of setup never removes a name that a daemon reads"):
+        # Each daemon start runs setup again, and a sibling daemon that starts
+        # at that moment reads etc, bin and lib. A name that is absent for an
+        # instant ends that daemon: "(1103): Could not open file
+        # 'etc/internal_options.conf'" and then "(2301): Definition not
+        # found". The property is that no name disappears, and inotify sees
+        # each removal, so the subtest needs no luck with timing. A rename
+        # over a name reports MOVED_TO and no DELETE.
+        watched = (
+            "/var/ossec /var/ossec/etc /var/ossec/active-response/bin"
+            " /var/ossec/queue/syscollector"
+        )
+        responder.succeed(f"ls -d {watched}")
+        responder.succeed(
+            "inotifywait -m -e delete -e moved_to --format '%e %w%f'"
+            f" {watched} > /tmp/setup-events 2> /tmp/setup-watch &"
+        )
+        responder.wait_until_succeeds(
+            "grep -q 'Watches established' /tmp/setup-watch", timeout=30
+        )
+        responder.succeed("systemctl start setup-pre-wazuh.service")
+        # The sentinel is the last event. All events of the rerun are before it.
+        responder.succeed(
+            "touch /var/ossec/etc/.sentinel.new"
+            " && mv -T /var/ossec/etc/.sentinel.new /var/ossec/etc/.sentinel"
+        )
+        responder.wait_until_succeeds(
+            "grep -q 'MOVED_TO /var/ossec/etc/.sentinel$' /tmp/setup-events",
+            timeout=30,
+        )
+        responder.succeed("pkill inotifywait; rm /var/ossec/etc/.sentinel")
+        events = responder.succeed("cat /tmp/setup-events").splitlines()
+        removed = [e for e in events if e.split()[0].startswith("DELETE")]
+        assert not removed, f"setup removed names during a rerun: {removed}"
+        # The control: the watch saw the rerun replace what the daemons read.
+        for name in (
+            "/var/ossec/bin",
+            "/var/ossec/lib",
+            "/var/ossec/etc/internal_options.conf",
+            "/var/ossec/etc/ossec.conf",
+            "/var/ossec/active-response/bin/firewall-drop",
+            "/var/ossec/queue/syscollector/norm_config.json",
+        ):
+            assert f"MOVED_TO {name}" in events, (
+                f"the rerun did not replace {name}: {events}"
+            )
 
     with subtest("only execd reaches the response programs"):
         # The reach this narrows. execd runs the response programs with
