@@ -146,6 +146,25 @@ pkgs.testers.runNixOSTest {
             server.log(server.execute(command)[1])
 
 
+    def wait_for_first_reload():
+        """The first shared configuration from the manager makes agentd
+        request a reload (agent patch 11), and wazuh-agent-reload restarts
+        logcollector. The journal reader takes future events only, so a
+        probe written during that restart is lost. Wait for the end of the
+        reload and for the journal reader of the current process."""
+        agent.wait_until_succeeds(
+            "test \"$(systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service)\" -gt 0"
+            " && test \"$(systemctl show -p ActiveState --value wazuh-agent-reload.service)\" = inactive"
+            " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
+            timeout=300,
+        )
+        agent.wait_until_succeeds(
+            "journalctl _PID=\"$(systemctl show -p MainPID --value wazuh-logcollector.service)\""
+            " | grep -q -F '(9203): Monitoring journal entries'",
+            timeout=120,
+        )
+
+
     def agent_state():
         for command in [
             "journalctl -u wazuh-agent-auth -u wazuh-agentd --no-pager | tail -n 60",
@@ -267,6 +286,8 @@ pkgs.testers.runNixOSTest {
         agent.wait_until_succeeds(
             "grep -q firewall-drop /var/ossec/etc/shared/ar.conf", timeout=180
         )
+        # The same first shared configuration starts a reload on the agent.
+        wait_for_first_reload()
         agent.fail("iptables -C INPUT -s 192.0.2.10 -j DROP")
         token = "wazuh-server-enrollment-alert-probe"
         agent.succeed(

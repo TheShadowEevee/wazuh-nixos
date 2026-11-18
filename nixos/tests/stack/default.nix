@@ -250,6 +250,25 @@ pkgs.testers.runNixOSTest {
             server.log(server.execute(command)[1])
 
 
+    def wait_for_first_reload():
+        """The first shared configuration from the manager makes agentd
+        request a reload (agent patch 11), and wazuh-agent-reload restarts
+        logcollector. The journal reader takes future events only, so a
+        probe written during that restart is lost. Wait for the end of the
+        reload and for the journal reader of the current process."""
+        agent.wait_until_succeeds(
+            "test \"$(systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service)\" -gt 0"
+            " && test \"$(systemctl show -p ActiveState --value wazuh-agent-reload.service)\" = inactive"
+            " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
+            timeout=300,
+        )
+        agent.wait_until_succeeds(
+            "journalctl _PID=\"$(systemctl show -p MainPID --value wazuh-logcollector.service)\""
+            " | grep -q -F '(9203): Monitoring journal entries'",
+            timeout=120,
+        )
+
+
     def agent_state():
         for command in [
             "journalctl -u wazuh-agent-auth -u wazuh-agentd --no-pager | tail -n 60",
@@ -367,6 +386,7 @@ pkgs.testers.runNixOSTest {
     with subtest("an event written on the agent reaches the server's archives.json"):
         # logcollector reads the journal with only-future-events, so the
         # probe is written after the daemons above came up.
+        wait_for_first_reload()
         token = "wazuh-stack-archive-probe"
         agent.succeed(f"systemd-cat --identifier=wazuh-probe echo {token}")
         try:

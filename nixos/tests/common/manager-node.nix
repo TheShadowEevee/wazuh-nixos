@@ -21,7 +21,11 @@ in
   # The manager runs a full Wazuh install plus filebeat, and the image unpacks
   # to several gigabytes. The test defaults are far too small for both.
   virtualisation.memorySize = 4096;
-  virtualisation.diskSize = 16384;
+  # 16 GiB filled in the GitHub runs #25 and #28 of the build workflow: the first
+  # "No space left on device" came with a write error of the vulnerability
+  # scanner, about 70 s after the container start. The enrollment check logs
+  # the disk use, so the real need is in each run log.
+  virtualisation.diskSize = 32768;
 
   # The test network is closed and has one agent on it. A firewall here only
   # adds a way for the check to fail for a reason that is not about Wazuh.
