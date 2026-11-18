@@ -370,7 +370,7 @@ The manager can send an `agent.conf` to the agents of a group. The agent
 writes it to `etc/shared/agent.conf`.
 
 `wazuh-agentd` checks the new file. If the file is valid, `wazuh-agentd`
-writes `var/run/reload-request`. The `wazuh-agent-reload` path unit sees the
+writes `/run/wazuh-agent/reload-request`. The `wazuh-agent-reload` path unit sees the
 write and starts the `wazuh-agent-reload` service. The service restarts each
 daemon except `wazuh-agentd` through its unit, and then sends `SIGUSR1` to
 `wazuh-agentd`. The new configuration is then active.

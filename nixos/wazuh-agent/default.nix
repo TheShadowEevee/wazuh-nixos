@@ -12,8 +12,11 @@ let
   enrollmentPasswordCredential = "wazuh-agent-auth-password";
   # wazuh-agentd writes this file when a new shared configuration from the
   # manager is valid (agent patch 11). The wazuh-agent-reload path unit
-  # watches it.
-  reloadRequest = "${stateDir}/var/run/reload-request";
+  # watches it. The file is not in the state directory: setup-pre-wazuh sets
+  # owner and mode of each file there at each run, and a path unit reads an
+  # attribute change as a change of the file.
+  reloadRequestDir = "/run/wazuh-agent";
+  reloadRequest = "${reloadRequestDir}/reload-request";
   cfg = config.services.wazuh-agent;
   pkg = cfg.package;
   configuredXml = optionalString (cfg.config != null) cfg.config + cfg.extraConfig;
@@ -234,13 +237,6 @@ let
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type d -exec chmod 750 {} +
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type f -exec chmod 640 {} +
 
-    # The file that wazuh-agentd writes to request a reload. It exists before
-    # the path unit watches it, and a rerun of this script does not write it.
-    # A write is a request, so a rerun must not make one.
-    install -d -m 0750 -o ${wazuhUser} -g ${wazuhGroup} ${stateDir}/var/run
-    if [ ! -e ${reloadRequest} ]; then
-      install -m 0640 -o ${wazuhUser} -g ${wazuhGroup} /dev/null ${reloadRequest}
-    fi
 
     replace_link ${generatedConfig} ${stateDir}/etc/ossec.conf
 
@@ -718,7 +714,8 @@ let
         ReadWritePaths =
           writableStateDirsFor d
           ++ writableStateFilesFor d
-          ++ optionals (d == "wazuh-execd") (gather "readWritePaths");
+          ++ optionals (d == "wazuh-execd") (gather "readWritePaths")
+          ++ optional (d == "wazuh-agentd") reloadRequestDir;
         NoExecPaths = noExecStateDirsFor d;
 
         Type = "exec";
@@ -1576,6 +1573,9 @@ in
     systemd.tmpfiles.rules = [
       "d ${stateDir} 0750 root ${wazuhGroup} -"
       "d ${stateDir}/tmp 0750 ${wazuhUser} ${wazuhGroup} 1d"
+      # The reload request of wazuh-agentd. Only that unit can write here.
+      "d ${reloadRequestDir} 0750 ${wazuhUser} ${wazuhGroup} -"
+      "f ${reloadRequest} 0640 ${wazuhUser} ${wazuhGroup} -"
     ]
     # A selected response may need a file outside /var/ossec to exist and to
     # belong to the wazuh user. Only host-deny does today.
@@ -1622,22 +1622,11 @@ in
     # and the service below does what the script was meant to do: restart
     # each daemon except agentd, then send SIGUSR1 to agentd.
     #
-    # Every daemon can write var/run, so every daemon can request a restart
-    # of its siblings. The request carries no data, and the service runs no
-    # command that a daemon chooses.
+    # Only wazuh-agentd can write the request file. The request carries no
+    # data, and the service runs no command that a daemon chooses.
     systemd.paths.wazuh-agent-reload = {
       description = "Watch for a reload request from wazuh-agentd";
-      # A path unit is ordered before paths.target, and so before basic.target.
-      # setup-pre-wazuh starts after basic.target, and this unit starts after
-      # setup-pre-wazuh, because the request file must exist first. That is a
-      # cycle, and systemd breaks it by dropping the setup job. So this unit
-      # takes no default dependencies and names the shutdown ordering itself.
-      unitConfig.DefaultDependencies = false;
-      before = [ "shutdown.target" ];
-      conflicts = [ "shutdown.target" ];
       wantedBy = [ "wazuh.target" ];
-      after = [ "setup-pre-wazuh.service" ];
-      wants = [ "setup-pre-wazuh.service" ];
       pathConfig.PathChanged = reloadRequest;
     };
     systemd.services = listToAttrs (map (d: nameValuePair d (mkService d)) daemons) // {

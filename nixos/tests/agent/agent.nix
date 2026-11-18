@@ -1324,7 +1324,7 @@ pkgs.testers.runNixOSTest {
         # shared configuration (agent patch 11). This VM has no manager, so
         # the test writes the file as the wazuh user. checks.server-enrollment
         # covers the request from a real manager.
-        request = "/var/ossec/var/run/reload-request"
+        request = "/run/wazuh-agent/reload-request"
         restarted = ["wazuh-logcollector", "wazuh-syscheckd", "wazuh-modulesd"]
 
         def main_pids():
@@ -1341,10 +1341,14 @@ pkgs.testers.runNixOSTest {
         agent.fail("journalctl -b | grep -q 'ordering cycle'")
         agent.succeed(f"test -f {request}")
 
-        # A rerun of setup is not a request.
+        # A rerun of setup is not a request, and a rerun of tmpfiles is not one.
+        # The first version kept the file under var, where setup sets owner
+        # and mode at each run, and each rerun of setup restarted the daemons.
         before = main_pids()
         assert "0" not in before.values(), before
         agent.succeed("systemctl start setup-pre-wazuh.service")
+        agent.sleep(5)
+        agent.succeed("systemd-tmpfiles --create")
         agent.sleep(5)
         assert main_pids() == before, f"a rerun of setup restarted a daemon: {before} -> {main_pids()}"
 
