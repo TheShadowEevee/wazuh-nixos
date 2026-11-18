@@ -279,9 +279,12 @@ pkgs.testers.runNixOSTest {
             )
             server.succeed(
                 f"grep -F '{token}' /var/ossec/logs/alerts/alerts.json"
-                " | jq -e '.agent.name == \"example-agent\""
+                # The response log can contain the same token and produce
+                # another alert. Require the sshd event among the matches;
+                # jq -e on a stream otherwise tests only its last result.
+                " | jq -es 'any(.[]; .agent.name == \"example-agent\""
                 " and (.decoder.parent // .decoder.name) == \"sshd\""
-                " and (.rule.level | tonumber) >= 3'"
+                " and (.rule.level | tonumber) >= 3)'"
             )
         except Exception:
             server_state()
