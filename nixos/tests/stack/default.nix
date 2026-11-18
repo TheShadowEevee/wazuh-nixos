@@ -548,6 +548,7 @@ pkgs.testers.runNixOSTest {
         }))
         try:
             server_key = server.succeed("grep ' example-agent ' /var/ossec/etc/client.keys").strip()
+            print(f"server client.keys before the reboot: {server.succeed('cat /var/ossec/etc/client.keys')!r}")
             agent_key = agent.succeed("cat /var/ossec/etc/client.keys").strip()
             # Same line format on both sides: id, name, address, key.
             assert server_key.split()[3] == agent_key.split()[3], (server_key, agent_key)
@@ -566,8 +567,10 @@ pkgs.testers.runNixOSTest {
                 timeout=900,
             )
             # The server kept the key, and the agent did not enroll again.
-            assert server.succeed("grep ' example-agent ' /var/ossec/etc/client.keys").strip() == server_key
-            assert agent.succeed("cat /var/ossec/etc/client.keys").strip() == agent_key
+            after = server.succeed("cat /var/ossec/etc/client.keys").strip()
+            assert after.splitlines() == [server_key], f"server client.keys before: {server_key!r}, after: {after!r}"
+            after = agent.succeed("cat /var/ossec/etc/client.keys").strip()
+            assert after == agent_key, f"agent client.keys before: {agent_key!r}, after: {after!r}"
 
             agent.succeed(
                 "systemd-cat --identifier=sshd"
