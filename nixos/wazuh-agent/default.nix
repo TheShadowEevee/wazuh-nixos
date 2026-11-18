@@ -10,15 +10,39 @@ let
   wazuhGroup = wazuhUser;
   stateDir = "/var/ossec";
   enrollmentPasswordCredential = "wazuh-agent-auth-password";
+  # wazuh-agentd writes this file when a new shared configuration from the
+  # manager is valid (agent patch 11). The wazuh-agent-reload path unit
+  # watches it. The file is not in the state directory: setup-pre-wazuh sets
+  # owner and mode of each file there at each run, and a path unit reads an
+  # attribute change as a change of the file.
+  reloadRequestDir = "/run/wazuh-agent";
+  reloadRequest = "${reloadRequestDir}/reload-request";
   cfg = config.services.wazuh-agent;
   pkg = cfg.package;
   configuredXml = optionalString (cfg.config != null) cfg.config + cfg.extraConfig;
   storeUnsafeWodles = [
     "aws-s3"
     "azure-logs"
-    "gcloud-pubsub"
     "docker-listener"
   ];
+  # Google Cloud is not a wodle in the configuration. Each collector has a
+  # section of its own. The bucket collector keeps gcloud.db beside its code
+  # (nixos/wazuh-server/cloud-wodles.nix moves that path for the server).
+  # The pubsub section was the intent of the old name gcloud-pubsub, which
+  # no configuration can contain, so it stays blocked with the bucket.
+  storeUnsafeSections = [
+    "gcp-pubsub"
+    "gcp-bucket"
+  ];
+  # The characters that can end a tag name.
+  tagNameEnds = [
+    ">"
+    "/"
+    " "
+    "\t"
+    "\n"
+  ];
+  hasSection = name: xml: any (end: hasInfix "<${name}${end}" xml) tagNameEnds;
 
   generatedConfig =
     if cfg.config != null then
@@ -75,6 +99,24 @@ let
   ];
 
   preStart = ''
+    # Point a name at a store path without a moment in which the name does
+    # not exist. A daemon that starts while this unit runs again reads these
+    # names, and a daemon that finds etc/internal_options.conf absent exits
+    # with "(2301): Definition not found". The new link gets a temporary name
+    # in the same directory, and rename(2) puts it over the old entry.
+    # rename cannot put a link over a real directory, so a directory from an
+    # older layout goes first. That case has a gap, one time, at migration.
+    replace_link() {
+      local target="$1" dest="$2" temporary
+      temporary="$(dirname "$dest")/.$(basename "$dest").new"
+      if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+        rm -rf "$dest"
+      fi
+      rm -rf "$temporary"
+      ln -s "$target" "$temporary"
+      mv -T "$temporary" "$dest"
+    }
+
     # The fixed layout belongs to root. Package trees point straight into the
     # store instead of being mutable copies owned by the daemon account.
     if [ -L ${stateDir} ]; then
@@ -82,13 +124,11 @@ let
     fi
     install -d -m 0750 -o root -g ${wazuhGroup} ${stateDir}
     ${concatMapStringsSep "\n" (dir: ''
-      rm -rf ${stateDir}/${dir}
-      ln -s ${pkg}/${dir} ${stateDir}/${dir}
+      replace_link ${pkg}/${dir} ${stateDir}/${dir}
     '') immutablePackageDirs}
     ${concatMapStringsSep "\n" (dir: ''
       if [ -d ${pkg}/${dir} ]; then
-        rm -rf ${stateDir}/${dir}
-        ln -s ${pkg}/${dir} ${stateDir}/${dir}
+        replace_link ${pkg}/${dir} ${stateDir}/${dir}
       else
         rm -rf ${stateDir}/${dir}
       fi
@@ -114,18 +154,33 @@ let
     install -d -m 0750 -o root -g ${wazuhGroup} ${stateDir}/active-response
     install -d -m 1770 -o root -g ${wazuhGroup} ${stateDir}/active-response/bin
     # Keep the directory inode, because it is a writable mount point in a
-    # running execd namespace, but keep no entry inside it. In particular, an
-    # attacker-staged symlink would resolve onto an executable store inode and
-    # must not persist across activation.
-    find ${stateDir}/active-response/bin -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    # running execd namespace, but keep no entry of the host inside it. In
+    # particular, an attacker-staged symlink would resolve onto an executable
+    # store inode and must not persist across activation.
+    #
+    # An entry that is not a response of the package is removed. A response
+    # of the package is replaced by rename, so execd never finds it absent,
+    # and whatever held that name before is gone when the loop ends. The two
+    # restart responses are unsupported and count as entries of the host.
+    is_response() {
+      case "$1" in
+        restart-wazuh | restart.sh) return 1 ;;
+      esac
+      [ -e ${pkg}/active-response/bin/"$1" ]
+    }
+    find ${stateDir}/active-response/bin -mindepth 1 -maxdepth 1 -print0 |
+      while IFS= read -r -d "" existing; do
+        if ! is_response "$(basename "$existing")"; then
+          rm -rf "$existing"
+        fi
+      done
     for entry in ${pkg}/active-response/bin/*; do
       [ -e "$entry" ] || continue
       name="$(basename "$entry")"
-      rm -rf ${stateDir}/active-response/bin/"$name"
-      ln -s "$entry" ${stateDir}/active-response/bin/"$name"
+      if is_response "$name"; then
+        replace_link "$entry" ${stateDir}/active-response/bin/"$name"
+      fi
     done
-    rm -f ${stateDir}/active-response/bin/restart-wazuh \
-      ${stateDir}/active-response/bin/restart.sh
 
     # etc is mixed. Its directory is sticky and root-owned; mutable host files
     # belong to wazuh, while package files and generated ossec.conf are store
@@ -165,8 +220,7 @@ let
         ${concatStringsSep " | " hostOwnedEtc}) ;;
         *)
           name="$(basename "$entry")"
-          rm -rf ${stateDir}/etc/"$name"
-          ln -s "$entry" ${stateDir}/etc/"$name"
+          replace_link "$entry" ${stateDir}/etc/"$name"
           ;;
       esac
     done
@@ -175,8 +229,7 @@ let
     # otherwise state. inst-functions.sh reinstalls it on every upgrade too.
     if [ -f ${pkg}/queue/syscollector/norm_config.json ]; then
       install -d -m 0750 -o ${wazuhUser} -g ${wazuhGroup} ${stateDir}/queue/syscollector
-      rm -f ${stateDir}/queue/syscollector/norm_config.json
-      ln -s ${pkg}/queue/syscollector/norm_config.json \
+      replace_link ${pkg}/queue/syscollector/norm_config.json \
         ${stateDir}/queue/syscollector/norm_config.json
     fi
 
@@ -184,8 +237,8 @@ let
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type d -exec chmod 750 {} +
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type f -exec chmod 640 {} +
 
-    rm -f ${stateDir}/etc/ossec.conf
-    ln -s ${generatedConfig} ${stateDir}/etc/ossec.conf
+
+    replace_link ${generatedConfig} ${stateDir}/etc/ossec.conf
 
     ${optionalString (cfg.agentAuthPasswordFile != null) ''
       # PID 1 reads the configured source before this service changes to the
@@ -635,6 +688,9 @@ let
       ];
     environment = {
       WAZUH_HOME = stateDir;
+    }
+    // optionalAttrs (d == "wazuh-agentd") {
+      WAZUH_RELOAD_REQUEST = reloadRequest;
     };
 
     serviceConfig =
@@ -658,7 +714,8 @@ let
         ReadWritePaths =
           writableStateDirsFor d
           ++ writableStateFilesFor d
-          ++ optionals (d == "wazuh-execd") (gather "readWritePaths");
+          ++ optionals (d == "wazuh-execd") (gather "readWritePaths")
+          ++ optional (d == "wazuh-agentd") reloadRequestDir;
         NoExecPaths = noExecStateDirsFor d;
 
         Type = "exec";
@@ -1364,12 +1421,14 @@ in
           name:
           !(hasInfix ''name="${name}"'' configuredXml)
           && !(hasInfix "name='${name}'" configuredXml)
-        ) storeUnsafeWodles;
+        ) storeUnsafeWodles
+        && all (name: !(hasSection name configuredXml)) storeUnsafeSections;
         message = ''
-          services.wazuh-agent config enables a wodle that writes a SQLite
+          services.wazuh-agent config enables a collector that writes a SQLite
           database beside its code. wodles is linked into the read-only Nix
-          store, so aws-s3, azure-logs, gcloud-pubsub and docker-listener are
-          unsupported until their state paths are moved under /var/ossec/var.
+          store, so the wodles aws-s3, azure-logs and docker-listener and the
+          sections gcp-pubsub and gcp-bucket are unsupported until their state
+          paths are moved under /var/ossec/var.
         '';
       }
       {
@@ -1514,6 +1573,9 @@ in
     systemd.tmpfiles.rules = [
       "d ${stateDir} 0750 root ${wazuhGroup} -"
       "d ${stateDir}/tmp 0750 ${wazuhUser} ${wazuhGroup} 1d"
+      # The reload request of wazuh-agentd. Only that unit can write here.
+      "d ${reloadRequestDir} 0750 ${wazuhUser} ${wazuhGroup} -"
+      "f ${reloadRequest} 0640 ${wazuhUser} ${wazuhGroup} -"
     ]
     # A selected response may need a file outside /var/ossec to exist and to
     # belong to the wazuh user. Only host-deny does today.
@@ -1546,7 +1608,42 @@ in
       pathConfig.PathChanged = "/nix/var/nix/profiles";
     };
 
+    # A new shared configuration from the manager.
+    #
+    # Upstream, wazuh-agentd asks wazuh-execd to run "bin/wazuh-control
+    # reload". That script stops and starts the daemons through pid files,
+    # outside their units and sandboxes, and under this layout it fails at
+    # its configuration test. So the request went nowhere, and a changed
+    # agent.conf was never applied.
+    #
+    # With agent patch 11, wazuh-agentd writes reloadRequest instead. It does
+    # that only after it checked the new configuration (verifyRemoteConf),
+    # and after the shared files are complete. This path unit sees the write,
+    # and the service below does what the script was meant to do: restart
+    # each daemon except agentd, then send SIGUSR1 to agentd.
+    #
+    # Only wazuh-agentd can write the request file. The request carries no
+    # data, and the service runs no command that a daemon chooses.
+    systemd.paths.wazuh-agent-reload = {
+      description = "Watch for a reload request from wazuh-agentd";
+      wantedBy = [ "wazuh.target" ];
+      pathConfig.PathChanged = reloadRequest;
+    };
     systemd.services = listToAttrs (map (d: nameValuePair d (mkService d)) daemons) // {
+      wazuh-agent-reload = {
+        description = "Apply a new shared configuration to the Wazuh agent daemons";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = [
+            "${config.systemd.package}/bin/systemctl try-restart ${
+              concatMapStringsSep " " (d: "${d}.service") (filter (d: d != "wazuh-agentd") daemons)
+            }"
+            # The "-" is for an agent that has no key yet: agentd does not run,
+            # and the other daemons still get the new configuration.
+            "-${config.systemd.package}/bin/systemctl kill --kill-whom=main --signal=SIGUSR1 wazuh-agentd.service"
+          ];
+        };
+      };
       wazuh-agent-auth = {
         description = "Enroll the Wazuh agent with its manager";
         after = [

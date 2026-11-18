@@ -38,8 +38,8 @@ first-class option and no entry in the generated file.
 | `wodle name="aws-s3"` | Blocked by assertion |
 | `wodle name="azure-logs"` | Blocked by assertion |
 | `wodle name="docker-listener"` | Blocked by assertion |
-| `gcp-pubsub` | Blocked by assertion, with a naming defect |
-| `gcp-bucket` | Missing, and not blocked |
+| `gcp-pubsub` | Blocked by assertion |
+| `gcp-bucket` | Blocked by assertion |
 
 ## Implemented sections
 
@@ -118,22 +118,14 @@ removed that module, so the block is dead configuration.
 ## Blocked sections
 
 An assertion in `nixos/wazuh-agent/default.nix` rejects a configuration
-that names `aws-s3`, `azure-logs`, `gcloud-pubsub` or `docker-listener`.
-These wodles write a SQLite database beside their own code. The module
-links `wodles` into the read-only Nix store, so the write fails at runtime.
-The assertion turns that runtime failure into an evaluation failure.
-
-The assertion has two defects. See the remaining work below.
+that names the wodles `aws-s3`, `azure-logs` or `docker-listener`, or the
+sections `gcp-pubsub` or `gcp-bucket`. These collectors write a SQLite
+database beside their own code. The module links `wodles` into the
+read-only Nix store, so the write fails at runtime. The assertion turns
+that runtime failure into an evaluation failure. `checks.agent-eval`
+tests the assertion with each form.
 
 ## Remaining work
-
-### Defects
-
-1. The store-safety assertion checks the name `gcloud-pubsub`. Wazuh 4.x
-   configures GCP as a top-level `<gcp-pubsub>` section, not as a wodle
-   with that name. The check therefore never matches a real configuration.
-2. `gcp-bucket` writes its state beside its code in the same way, and the
-   assertion does not cover it.
 
 ### New options, in priority order
 
@@ -158,8 +150,8 @@ The assertion has two defects. See the remaining work below.
 
 The blocked wodles stay blocked until their state paths move under
 `/var/ossec/var`. That needs either an upstream patch or a wrapper that
-sets each wodle's database path. Fix the assertion defects first, so the
-block is accurate while it stands.
+sets each wodle's database path. `checks.agent-eval` keeps the block
+accurate while it stands.
 
 ### Out of scope
 

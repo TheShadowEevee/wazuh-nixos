@@ -73,10 +73,10 @@ paths and custom Python integration delivery. Existing `server-config` checks
 rootcheck, syscheck, SCA, syscollector, journald and command collection.
 `server-runtime` checks listeners, Slack delivery to a local receiver, and
 integration secret protection. Optional service checks cover their respective
-local protocol peers: `server-optional` covers SMTP/syslog,
+local protocol peers: `server-optional` covers SMTP/syslog and the daily report,
 `server-agentless` covers SSH key/password authentication and per-account
 change alerts, and `server-cluster` covers worker synchronization and HAProxy
-configuration parsing. Daily report scheduling, sendmail delivery, and an actual
+configuration parsing. Sendmail delivery and an actual
 HAProxy Data Plane API are not exercised in these VMs.
 See the implementation report for which checks passed at
 the final commit; the table alone is not test evidence.

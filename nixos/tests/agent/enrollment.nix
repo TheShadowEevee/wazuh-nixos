@@ -52,9 +52,31 @@ pkgs.testers.runNixOSTest {
     };
 
   testScript = ''
+    def wait_for_first_reload():
+        """The first shared configuration from the manager makes agentd
+        request a reload (agent patch 11), and wazuh-agent-reload restarts
+        logcollector. The journal reader takes future events only, so a
+        probe written during that restart is lost. Wait for the end of the
+        reload and for the journal reader of the current process."""
+        agent.wait_until_succeeds(
+            "test \"$(systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service)\" -gt 0"
+            " && test \"$(systemctl show -p ActiveState --value wazuh-agent-reload.service)\" = inactive"
+            " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
+            timeout=300,
+        )
+        agent.wait_until_succeeds(
+            "journalctl _PID=\"$(systemctl show -p MainPID --value wazuh-logcollector.service)\""
+            " | grep -q -F '(9203): Monitoring journal entries'",
+            timeout=120,
+        )
+
+
     def manager_state():
         """Everything needed to tell a load failure from a slow start."""
         for command in [
+            "df -h / /tmp /var/lib/docker",
+            "df -i /",
+            "du -xsh /var/lib/docker/* 2>/dev/null",
             "docker images",
             "docker ps -a",
             "docker logs wazuh-manager 2>&1 | tail -n 80",
@@ -250,6 +272,7 @@ pkgs.testers.runNixOSTest {
 
         # only-future-events defaults to true, so the probe must be written
         # after logcollector opened the journal. It was, several steps ago.
+        wait_for_first_reload()
         token = "wazuh-enrollment-archive-probe"
         agent.succeed(f"systemd-cat --identifier=wazuh-probe echo {token}")
 
@@ -274,5 +297,8 @@ pkgs.testers.runNixOSTest {
             agent.log("--- agentd state")
             agent.log(agent.execute("cat /var/ossec/var/run/wazuh-agentd.state")[1])
             raise
+
+    # The disk use of the manager at the end, also in a run that passes.
+    manager.log(manager.execute("df -h /; du -xsh /var/lib/docker/* 2>/dev/null")[1])
   '';
 }

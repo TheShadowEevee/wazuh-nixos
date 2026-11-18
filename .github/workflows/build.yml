@@ -26,7 +26,7 @@ on:
   push:
     branches:
       - main
-      - integration/server-stack
+      - integration/*
   pull_request:
   workflow_dispatch:
 

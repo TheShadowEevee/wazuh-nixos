@@ -69,11 +69,31 @@ pkgs.testers.runNixOSTest {
         # or not a rule matches. Without it the archive probe below would be
         # discarded and prove nothing.
         logAll = true;
+        settings.command = [
+          {
+            name = "firewall-drop";
+            executable = "firewall-drop";
+            timeout_allowed = true;
+          }
+        ];
+        settings.active-response = [
+          {
+            command = "firewall-drop";
+            location = "local";
+            rules_id = "5760";
+            timeout = 120;
+          }
+        ];
+        api.users.wazuh.passwordFile = "/run/secrets/api-password";
       };
 
-      systemd.tmpfiles.rules = [ passwordRule ];
+      systemd.tmpfiles.rules = [
+        passwordRule
+        "f /run/secrets/api-password 0400 root root - Persistence-Test42!"
+      ];
 
       environment.systemPackages = [
+        pkgs.curl
         pkgs.jq
         pkgs.iproute2
       ];
@@ -84,8 +104,10 @@ pkgs.testers.runNixOSTest {
     {
       imports = [ wazuhModule ];
 
+      environment.systemPackages = [ pkgs.iptables ];
       services.wazuh-agent = {
         enable = true;
+        activeResponse.enable = true;
 
         # The hostname, because the server certificate names it. See the
         # header comment for why that needs the server to listen on IPv6.
@@ -124,11 +146,35 @@ pkgs.testers.runNixOSTest {
             server.log(server.execute(command)[1])
 
 
+    def wait_for_first_reload():
+        """The first shared configuration from the manager makes agentd
+        request a reload (agent patch 11), and wazuh-agent-reload restarts
+        logcollector. The journal reader takes future events only, so a
+        probe written during that restart is lost. Wait for the end of the
+        reload and for the journal reader of the current process."""
+        agent.wait_until_succeeds(
+            "test \"$(systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service)\" -gt 0"
+            " && test \"$(systemctl show -p ActiveState --value wazuh-agent-reload.service)\" = inactive"
+            " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
+            timeout=300,
+        )
+        agent.wait_until_succeeds(
+            "journalctl _PID=\"$(systemctl show -p MainPID --value wazuh-logcollector.service)\""
+            " | grep -q -F '(9203): Monitoring journal entries'",
+            timeout=120,
+        )
+
+
     def agent_state():
         for command in [
             "journalctl -u wazuh-agent-auth -u wazuh-agentd --no-pager | tail -n 60",
             "cat /var/ossec/var/run/wazuh-agentd.state",
             "cat /var/ossec/etc/client.keys",
+            "cat /var/ossec/etc/shared/ar.conf",
+            "cat /var/ossec/logs/active-responses.log",
+            "tail -n 80 /var/ossec/logs/ossec.log",
+            "journalctl -u wazuh-execd --no-pager | tail -n 60",
+            "iptables -S",
         ]:
             agent.log(f"--- agent: {command}")
             agent.log(agent.execute(command)[1])
@@ -235,24 +281,126 @@ pkgs.testers.runNixOSTest {
         # the line, so the alert names it with sshd as the parent. "Failed
         # password" matches rule 5716 and then 5760, both level 5, above
         # the alert level of 3.
+        # ar.conf arrives asynchronously after enrollment. An event sent
+        # before the command is known is discarded by execd, not replayed.
+        agent.wait_until_succeeds(
+            "grep -q firewall-drop /var/ossec/etc/shared/ar.conf", timeout=180
+        )
+        # The same first shared configuration starts a reload on the agent.
+        wait_for_first_reload()
+        agent.fail("iptables -C INPUT -s 192.0.2.10 -j DROP")
         token = "wazuh-server-enrollment-alert-probe"
         agent.succeed(
             "systemd-cat --identifier=sshd"
             f" echo 'Failed password for {token} from 192.0.2.10 port 4242 ssh2'"
         )
         try:
+            # Wait for the full predicate: analysisd may still be appending
+            # a JSON record when the token first becomes visible. A response
+            # log can also create another alert containing the same token.
             server.wait_until_succeeds(
-                f"grep -q -F '{token}' /var/ossec/logs/alerts/alerts.json", timeout=300
-            )
-            server.succeed(
                 f"grep -F '{token}' /var/ossec/logs/alerts/alerts.json"
-                " | jq -e '.agent.name == \"example-agent\""
+                " | jq -es 'any(.[]; .agent.name == \"example-agent\""
                 " and (.decoder.parent // .decoder.name) == \"sshd\""
-                " and (.rule.level | tonumber) >= 3'"
+                " and (.rule.level | tonumber) >= 3)'",
+                timeout=300,
             )
         except Exception:
             server_state()
             raise
+
+    with subtest("the server dispatches active response to the enrolled agent"):
+        # The sshd event above fires rule 5760 on the manager; execd must
+        # execute the manager's response on the originating agent.
+        agent.wait_for_unit("wazuh-execd.service")
+        try:
+            agent.wait_until_succeeds(
+                "iptables -C INPUT -s 192.0.2.10 -j DROP", timeout=60
+            )
+            agent.succeed("iptables -C FORWARD -s 192.0.2.10 -j DROP")
+            agent.succeed("grep 'firewall-drop' /var/ossec/logs/active-responses.log | grep -q 192.0.2.10")
+        except Exception:
+            agent_state()
+            server_state()
+            raise
+
+    with subtest("a changed shared configuration reaches the agent daemons"):
+        # The manager sends a new agent.conf. wazuh-agentd checks it and writes
+        # the reload request (agent patch 11), and wazuh-agent-reload restarts
+        # the daemons through their units. Before that fix, execd ran
+        # bin/wazuh-control, which failed, and logcollector kept the old
+        # configuration.
+        stamp = "systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service"
+        before = int(agent.succeed(stamp).strip() or 0)
+        agent.succeed("echo first > /var/log/reload-probe.log")
+        server.succeed(
+            "runuser -u wazuh -- sh -c 'cat > /var/ossec/etc/shared/default/agent.conf' <<'XML'\n"
+            "<agent_config>\n"
+            "  <localfile>\n"
+            "    <log_format>syslog</log_format>\n"
+            "    <location>/var/log/reload-probe.log</location>\n"
+            "  </localfile>\n"
+            "</agent_config>\n"
+            "XML"
+        )
+        try:
+            agent.wait_until_succeeds(
+                "grep -q reload-probe.log /var/ossec/etc/shared/agent.conf", timeout=300
+            )
+            agent.wait_until_succeeds(
+                f"test \"$({stamp})\" -gt {before}"
+                " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
+                timeout=120,
+            )
+            agent.wait_until_succeeds(
+                "journalctl -u wazuh-logcollector | grep -q \"Analyzing file: '/var/log/reload-probe.log'\"",
+                timeout=120,
+            )
+            agent.wait_until_succeeds("journalctl -u wazuh-agentd | grep -q 'Reload agentd'", timeout=60)
+            agent.fail("journalctl -u wazuh-execd | grep -q 'wazuh-control'")
+            for unit in ["wazuh-agentd", "wazuh-logcollector", "wazuh-syscheckd", "wazuh-modulesd", "wazuh-execd"]:
+                agent.succeed(f"systemctl is-active {unit}.service")
+        except Exception:
+            agent_state()
+            server_state()
+            raise
+
+    with subtest("keys, API users and agent groups survive server reboot"):
+        import json
+        server.wait_for_unit("wazuh-api-users.service")
+        base = "curl --fail --silent --show-error --cacert ${pki.ca}"
+        auth = "-u wazuh:Persistence-Test42! -X POST 'https://server:55000/security/user/authenticate?raw=true'"
+        token = server.succeed(base + " " + auth).strip()
+        api = base + f" -H 'Authorization: Bearer {token}'"
+        # A user created through the API is not recreated by declarative
+        # api.users at boot, so this detects loss of the RBAC database.
+        user = json.loads(server.succeed(api + " -H 'Content-Type: application/json' -X POST https://server:55000/security/users -d "
+            + "'" + json.dumps({"username": "persistent-api-user", "password": "User-Persistence42!"}) + "'"))
+        assert user["error"] == 0, user
+        created = json.loads(server.succeed(api + " -H 'Content-Type: application/json' -X POST https://server:55000/groups -d "
+            + "'" + json.dumps({"group_id": "persistent-test"}) + "'"))
+        assert created["error"] == 0, created
+        agent_id = server.succeed("awk '/ example-agent / {print $1}' /var/ossec/etc/client.keys").strip()
+        assigned = json.loads(server.succeed(api + f" -X PUT 'https://server:55000/agents/{agent_id}/group/persistent-test'"))
+        assert assigned["error"] == 0, assigned
+        keys = server.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        agent_keys = agent.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        server.shutdown()
+        server.start()
+        server.wait_for_unit("wazuh-api-users.service")
+        server.wait_for_unit("wazuh-remoted.service")
+        assert keys == server.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        assert agent_keys == agent.succeed("sha256sum /var/ossec/etc/client.keys").strip()
+        token = server.succeed(base + " " + auth).strip()
+        api = base + f" -H 'Authorization: Bearer {token}'"
+        server.succeed(base + " -u persistent-api-user:User-Persistence42! -X POST 'https://server:55000/security/user/authenticate?raw=true'")
+        group = json.loads(server.succeed(api + " 'https://server:55000/groups/persistent-test/agents'"))
+        assert group["error"] == 0, group
+        assert any(item["id"] == agent_id for item in group["data"]["affected_items"]), group
+        server.fail(base + " -u wazuh:wazuh -X POST 'https://server:55000/security/user/authenticate?raw=true'")
+        agent.wait_until_succeeds("grep -q \"^status='connected'\" /var/ossec/var/run/wazuh-agentd.state", timeout=240)
+        agent.succeed("systemd-cat --identifier=wazuh-probe echo post-reboot-persistence-probe")
+        server.wait_until_succeeds("grep -q post-reboot-persistence-probe /var/ossec/logs/archives/archives.json", timeout=300)
 
     with subtest("authd rejects an enrollment with a wrong password"):
         # The enrollments above supplied only the right password, so an

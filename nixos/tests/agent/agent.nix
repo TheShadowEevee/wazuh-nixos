@@ -46,6 +46,9 @@ pkgs.testers.runNixOSTest {
       environment.systemPackages = [
         pkgs.jq
         pkgs.sqlite
+        # The enrollment timeout subtest needs a listener that never answers.
+        pkgs.socat
+        pkgs.strace
       ];
     };
 
@@ -75,6 +78,9 @@ pkgs.testers.runNixOSTest {
         registration.certFile = pkgs.writeText "test-agent.pem" "";
         registration.keyFile = pkgs.writeText "test-agent-key.pem" "";
       };
+
+      # The setup rerun subtest watches the state directory.
+      environment.systemPackages = [ pkgs.inotify-tools ];
     };
 
   # Active response on, but only the response that needs no capability. This
@@ -261,6 +267,42 @@ pkgs.testers.runNixOSTest {
         agent.succeed("grep -qx test-enrollment-password /var/ossec/etc/authd.pass")
         agent.succeed("test $(stat -c %U:%G /var/ossec/etc/authd.pass) = wazuh:wazuh")
         agent.succeed("test $(stat -c %a /var/ossec/etc/authd.pass) = 640")
+
+    with subtest("agent-auth waits for a slow manager"):
+        # Patch 10. agent-auth read its receive timeout from memory that
+        # nothing had set, and in CI the value was 1 second. A manager that
+        # answered later kept the registration and the agent got no key.
+        # The listener here (socat -u) reads and never answers, so the
+        # TLS handshake cannot complete. `timeout` must be what stops
+        # agent-auth (exit 124). An exit before that is the old behavior.
+        agent.succeed(
+            "systemd-run --unit=silent-authd $(command -v socat) -u TCP-LISTEN:1599,fork,reuseaddr OPEN:/dev/null"
+        )
+        agent.wait_for_open_port(1599)
+        # The command line of the unit, with the host and port replaced.
+        # The value in the unset field depended on what the process did
+        # before, so the test runs what the unit runs.
+        cmd = agent.succeed(
+            "sed -n 's/^ExecStart=//p' /etc/systemd/system/wazuh-agent-auth.service"
+            " | sed -E 's/ -m [^ ]+/ -m 127.0.0.1/; s/ -p [0-9]+/ -p 1599/'"
+        ).strip()
+        assert "-m 127.0.0.1" in cmd and "-p 1599" in cmd, f"unexpected ExecStart: {cmd!r}"
+        status, out = agent.execute(
+            "runuser -u wazuh -- env WAZUH_HOME=/var/ossec timeout 10"
+            f" strace -f -e trace=setsockopt {cmd} 2>&1"
+        )
+        agent.log(out)
+        assert "Requesting a key from server" in out, f"agent-auth did not start: {out!r}"
+        # The direct evidence: the timeout that agent-auth gives the kernel.
+        timeouts = [l for l in out.splitlines() if "SO_RCVTIMEO" in l]
+        assert timeouts, f"agent-auth set no receive timeout: {out!r}"
+        # strace prints the timeval as bytes: 8 for the seconds and 8 for the
+        # microseconds, little-endian. 60 is "<". The unpatched package gave
+        # "!" here, which is 33, a value that nothing in the source sets.
+        want = '"<' + r"\0" * 15 + '"'
+        assert all(want in l for l in timeouts), f"receive timeout is not 60 s: {timeouts!r}"
+        assert status == 124, f"agent-auth stopped before 10 s (exit {status}): {out!r}"
+        agent.succeed("systemctl stop silent-authd.service")
 
     with subtest("no daemon is reachable through a setuid wrapper"):
         for daemon in daemons:
@@ -689,6 +731,9 @@ pkgs.testers.runNixOSTest {
             assert got == "", f"{daemon} holds {got!r} with active response off"
 
     with subtest("active response on grants execd exactly what it needs"):
+        # The first command starts this VM. Its boot time is not part of
+        # the 120 s below.
+        responder.wait_for_unit("multi-user.target")
         responder.wait_for_file("/var/ossec/etc/ossec.conf", timeout=120)
 
         responder.succeed(
@@ -859,6 +904,53 @@ pkgs.testers.runNixOSTest {
         responder.fail("test -e /var/ossec/active-response/bin/restart-wazuh")
         responder.fail("test -e /var/ossec/active-response/bin/restart.sh")
 
+    with subtest("a rerun of setup never removes a name that a daemon reads"):
+        # Each daemon start runs setup again, and a sibling daemon that starts
+        # at that moment reads etc, bin and lib. A name that is absent for an
+        # instant ends that daemon: "(1103): Could not open file
+        # 'etc/internal_options.conf'" and then "(2301): Definition not
+        # found". The property is that no name disappears, and inotify sees
+        # each removal, so the subtest needs no luck with timing. A rename
+        # over a name reports MOVED_TO and no DELETE.
+        watched = (
+            "/var/ossec /var/ossec/etc /var/ossec/active-response/bin"
+            " /var/ossec/queue/syscollector"
+        )
+        responder.succeed(f"ls -d {watched}")
+        responder.succeed(
+            "inotifywait -m -e delete -e moved_to --format '%e %w%f'"
+            f" {watched} > /tmp/setup-events 2> /tmp/setup-watch &"
+        )
+        responder.wait_until_succeeds(
+            "grep -q 'Watches established' /tmp/setup-watch", timeout=30
+        )
+        responder.succeed("systemctl start setup-pre-wazuh.service")
+        # The sentinel is the last event. All events of the rerun are before it.
+        responder.succeed(
+            "touch /var/ossec/etc/.sentinel.new"
+            " && mv -T /var/ossec/etc/.sentinel.new /var/ossec/etc/.sentinel"
+        )
+        responder.wait_until_succeeds(
+            "grep -q 'MOVED_TO /var/ossec/etc/.sentinel$' /tmp/setup-events",
+            timeout=30,
+        )
+        responder.succeed("pkill inotifywait; rm /var/ossec/etc/.sentinel")
+        events = responder.succeed("cat /tmp/setup-events").splitlines()
+        removed = [e for e in events if e.split()[0].startswith("DELETE")]
+        assert not removed, f"setup removed names during a rerun: {removed}"
+        # The control: the watch saw the rerun replace what the daemons read.
+        for name in (
+            "/var/ossec/bin",
+            "/var/ossec/lib",
+            "/var/ossec/etc/internal_options.conf",
+            "/var/ossec/etc/ossec.conf",
+            "/var/ossec/active-response/bin/firewall-drop",
+            "/var/ossec/queue/syscollector/norm_config.json",
+        ):
+            assert f"MOVED_TO {name}" in events, (
+                f"the rerun did not replace {name}: {events}"
+            )
+
     with subtest("only execd reaches the response programs"):
         # The reach this narrows. execd runs the response programs with
         # CAP_NET_ADMIN, or as root under disable-account. While
@@ -905,6 +997,9 @@ pkgs.testers.runNixOSTest {
         # because the only response enabled is the one that needs a binary
         # and not a privilege. This is what makes the grant subtractive
         # rather than all-or-nothing.
+        # The first command starts this VM. Its boot time is not part of
+        # the 120 s below.
+        notifier.wait_for_unit("multi-user.target")
         notifier.wait_for_file("/var/ossec/etc/ossec.conf", timeout=120)
         notifier.succeed("systemctl cat wazuh-execd.service >/dev/null")
 
@@ -929,6 +1024,9 @@ pkgs.testers.runNixOSTest {
         notifier.fail("test -e /etc/hosts.deny")
 
     with subtest("only disable-account escalates, and only execd"):
+        # The first command starts this VM. Its boot time is not part of
+        # the 120 s below.
+        disabler.wait_for_unit("multi-user.target")
         disabler.wait_for_file("/var/ossec/etc/ossec.conf", timeout=120)
 
         # shadow reads the real UID, so this response is unreachable without
@@ -1220,5 +1318,62 @@ pkgs.testers.runNixOSTest {
         )
         agent.wait_for_file(closure, timeout=60)
         agent.succeed(f"grep -qxF '{toplevel}' {closure}")
+
+    with subtest("a reload request restarts the daemons through their units"):
+        # wazuh-agentd writes the request file when the manager sends a new
+        # shared configuration (agent patch 11). This VM has no manager, so
+        # the test writes the file as the wazuh user. checks.server-enrollment
+        # covers the request from a real manager.
+        request = "/run/wazuh-agent/reload-request"
+        restarted = ["wazuh-logcollector", "wazuh-syscheckd", "wazuh-modulesd"]
+
+        def main_pids():
+            return {
+                d: agent.succeed(f"systemctl show -p MainPID --value {d}.service").strip()
+                for d in restarted
+            }
+
+        for d in restarted:
+            agent.succeed(f"systemctl start {d}.service")
+        agent.succeed("systemctl is-active wazuh-agent-reload.path")
+        # An ordering cycle makes systemd drop a job at boot. The first version
+        # of the path unit had one with setup-pre-wazuh.
+        agent.fail("journalctl -b | grep -q 'ordering cycle'")
+        agent.succeed(f"test -f {request}")
+
+        # A rerun of setup is not a request, and a rerun of tmpfiles is not one.
+        # The first version kept the file under var, where setup sets owner
+        # and mode at each run, and each rerun of setup restarted the daemons.
+        before = main_pids()
+        assert "0" not in before.values(), before
+        agent.succeed("systemctl start setup-pre-wazuh.service")
+        agent.sleep(5)
+        agent.succeed("systemd-tmpfiles --create")
+        agent.sleep(5)
+        assert main_pids() == before, f"a rerun of setup restarted a daemon: {before} -> {main_pids()}"
+
+        agent.succeed(f"runuser -u wazuh -- sh -c 'date +%s > {request}'")
+        # The service is a oneshot. Its Result reads "success" while it runs, so
+        # the wait is on the daemons: each has a new main process.
+        for d in restarted:
+            agent.wait_until_succeeds(
+                f"pid=$(systemctl show -p MainPID --value {d}.service)"
+                f" && test \"$pid\" != 0 && test \"$pid\" != {before[d]}",
+                timeout=60,
+            )
+        agent.wait_until_succeeds(
+            "test \"$(systemctl show -p ActiveState --value wazuh-agent-reload.service)\" = inactive"
+            " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
+            timeout=60,
+        )
+        after = main_pids()
+        for d in restarted:
+            assert after[d] not in ("0", before[d]), f"{d} did not restart: {before[d]} -> {after[d]}"
+            # The new process is the main process of its unit, in its sandbox.
+            agent.succeed(f"systemctl is-active {d}.service")
+            agent.succeed(
+                f"test \"$(systemctl show -p ControlGroup --value {d}.service)\""
+                f" = \"/$(cut -d/ -f2- /proc/{after[d]}/cgroup)\""
+            )
   '';
 }

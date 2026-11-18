@@ -1,0 +1,29 @@
+diff --git a/src/client-agent/reload_agent.c b/src/client-agent/reload_agent.c
+--- a/src/client-agent/reload_agent.c
++++ b/src/client-agent/reload_agent.c
+@@ -27,6 +27,25 @@
+ 
+ 	#ifndef WIN32
+ 
++	/* On NixOS each daemon is a systemd unit. The module names a file here,
++	 * and a path unit restarts the other daemons when the file changes.
++	 * bin/wazuh-control cannot do that: it starts daemons outside their
++	 * units. Without the variable, the upstream path below is unchanged. */
++	const char *reload_request = getenv("WAZUH_RELOAD_REQUEST");
++
++	if (reload_request && *reload_request) {
++		FILE *request_file = fopen(reload_request, "w");
++
++		if (request_file) {
++			fprintf(request_file, "%ld\n", (long)time(NULL));
++			fclose(request_file);
++		} else {
++			merror("At reloadAgent(): Could not write '%s': %s (%d).", reload_request, strerror(errno), errno);
++		}
++
++		return NULL;
++	}
++
+ 	ssize_t length;
+ 	length = strlen(req);
+ 

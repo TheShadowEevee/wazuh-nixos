@@ -1,0 +1,15 @@
+diff --git a/src/shared/enrollment_op.c b/src/shared/enrollment_op.c
+index cc4c5d8..6c41599 100644
+--- a/src/shared/enrollment_op.c
++++ b/src/shared/enrollment_op.c
+@@ -112,6 +112,10 @@ w_enrollment_ctx * w_enrollment_init(w_enrollment_target *target, w_enrollment_c
+     cfg->ssl = NULL;
+     cfg->allow_localhost = true;
+     cfg->delay_after_enrollment = 20;
++    /* agent-auth never sets this field, and os_malloc does not clear it.
++     * wazuh-agentd overwrites it from agent.recv_timeout. Use that
++     * option's default, so that agent-auth waits as long as agentd. */
++    cfg->recv_timeout = 60;
+     cfg->keys = keys;
+     os_strdup(__ossec_version, cfg->agent_version);
+     return cfg;

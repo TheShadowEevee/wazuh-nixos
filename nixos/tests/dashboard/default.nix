@@ -1,11 +1,32 @@
-{ pkgs }:
+# plant: null for the check. A name from plants below builds the same test
+# with one gap planted, to show that a subtest fails on it. See
+# nixos/tests/indexer/default.nix for the command.
+{ pkgs, plant ? null }:
 let
+  inherit (pkgs) lib;
+  # Each plant breaks one property that one subtest asserts.
+  plants = {
+    # The dashboard serves plain HTTP on its port.
+    http.systemd.services.wazuh-dashboard.preStart = lib.mkAfter ''
+      python3 - <<'EOF'
+      import json, pathlib
+      path = pathlib.Path("/run/wazuh-dashboard/opensearch_dashboards.yml")
+      settings = json.loads(path.read_text())
+      settings["server.ssl.enabled"] = False
+      path.write_text(json.dumps(settings))
+      EOF
+    '';
+    # /api/status answers without a valid login.
+    auth.services.wazuh-dashboard.settings."opensearch_security.auth.unauthenticated_routes" = [ "/api/status" ];
+  };
   pki = import ../common/pki.nix { inherit pkgs; };
   fixture = import ../indexer/fixture.nix { inherit pkgs pki; };
   dashboardPackage = pkgs.callPackage ../../../pkgs/wazuh-dashboard { };
   managerUser = pkgs.writeText "test-manager-user" "wazuh-wui";
-in pkgs.testers.runNixOSTest {
-  name = "wazuh-dashboard";
+in
+assert plant == null || plants ? ${plant};
+pkgs.testers.runNixOSTest {
+  name = "wazuh-dashboard" + lib.optionalString (plant != null) "-plant-${plant}";
   nodes = {
     indexer = { lib, ... }: {
       imports = [ fixture.module ];
@@ -25,7 +46,7 @@ in pkgs.testers.runNixOSTest {
       };
     };
     dashboard = { ... }: {
-      imports = [ ../../wazuh-dashboard ];
+      imports = [ ../../wazuh-dashboard ] ++ lib.optional (plant != null) plants.${plant};
       virtualisation.memorySize = 2048;
       environment.systemPackages = [ pkgs.curl pkgs.jq pkgs.findutils ];
       system.activationScripts.kibanaserver-password = ''
@@ -58,7 +79,38 @@ in pkgs.testers.runNixOSTest {
     server.wait_for_unit("test-api.service")
     dashboard.wait_for_unit("wazuh-dashboard.service")
     dashboard.wait_for_open_port(5601)
+    http_code = "curl --silent --output /dev/null --max-time 10 --write-out '%{http_code}' "
+
+    with subtest("plain HTTP on the dashboard port gets no HTTP answer"):
+        # Wait until the listener answers either scheme, so that neither
+        # assertion below can pass on a listener that is not up yet.
+        https = http_code + "--cacert ${pki.ca} https://dashboard:5601/api/status"
+        plain = http_code + "http://dashboard:5601/api/status"
+        dashboard.wait_until_succeeds(f"test \"$({https})$({plain})\" != 000000", timeout=600)
+        # The TLS listener closes on a plain request: curl reports 000. A
+        # redirect to HTTPS would also be safe, but this module has none.
+        answer = dashboard.succeed(plain + " || true").strip()
+        assert answer == "000", f"plain HTTP got status {answer}"
+        # Positive control: the same listener answers HTTPS, with any status.
+        answer = dashboard.succeed(https + " || true").strip()
+        assert answer != "000", "HTTPS got no answer"
+
     dashboard.wait_until_succeeds("curl --fail --silent --cacert ${pki.ca} https://dashboard:5601/api/status -u 'admin:Test-password-42!' | jq -e '.status.overall.state == \"green\"'", timeout=600)
+
+    with subtest("the dashboard refuses a wrong password"):
+        status = http_code + "--cacert ${pki.ca} https://dashboard:5601/api/status"
+        answer = dashboard.succeed(status + " -u 'admin:Wrong-password-1!'").strip()
+        assert answer == "401", f"/api/status, wrong password: {answer}"
+        answer = dashboard.succeed(status).strip()
+        assert answer != "200", f"/api/status, no credentials: {answer}"
+        answer = dashboard.succeed(status + " -u 'admin:Test-password-42!'").strip()
+        assert answer == "200", f"/api/status, right password: {answer}"
+        login = http_code + "--cacert ${pki.ca} -H 'osd-xsrf: true' -H 'Content-Type: application/json' https://dashboard:5601/auth/login -d "
+        answer = dashboard.succeed(login + "'{\"username\":\"admin\",\"password\":\"Wrong-password-1!\"}'").strip()
+        assert answer == "401", f"/auth/login, wrong password: {answer}"
+        answer = dashboard.succeed(login + "'{\"username\":\"admin\",\"password\":\"Test-password-42!\"}'").strip()
+        assert answer == "200", f"/auth/login, right password: {answer}"
+
     dashboard.wait_until_succeeds("curl --fail --silent --cacert ${pki.ca} -u 'admin:Test-password-42!' -H 'osd-xsrf: true' -H 'Content-Type: application/json' -d '{\"id\":\"manager-0\"}' https://dashboard:5601/api/check-stored-api | jq -e '.statusCode == 200 and .data.cluster_info.manager == \"server\"'", timeout=240)
     dashboard.fail("curl --fail --silent --cacert ${pki.wrongCa} https://dashboard:5601/api/status")
     dashboard.succeed("test $(stat -c %a /run/wazuh-dashboard/opensearch_dashboards.yml) = 600")
