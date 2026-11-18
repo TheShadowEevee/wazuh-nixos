@@ -274,17 +274,15 @@ pkgs.testers.runNixOSTest {
             f" echo 'Failed password for {token} from 192.0.2.10 port 4242 ssh2'"
         )
         try:
+            # Wait for the full predicate: analysisd may still be appending
+            # a JSON record when the token first becomes visible. A response
+            # log can also create another alert containing the same token.
             server.wait_until_succeeds(
-                f"grep -q -F '{token}' /var/ossec/logs/alerts/alerts.json", timeout=300
-            )
-            server.succeed(
                 f"grep -F '{token}' /var/ossec/logs/alerts/alerts.json"
-                # The response log can contain the same token and produce
-                # another alert. Require the sshd event among the matches;
-                # jq -e on a stream otherwise tests only its last result.
                 " | jq -es 'any(.[]; .agent.name == \"example-agent\""
                 " and (.decoder.parent // .decoder.name) == \"sshd\""
-                " and (.rule.level | tonumber) >= 3)'"
+                " and (.rule.level | tonumber) >= 3)'",
+                timeout=300,
             )
         except Exception:
             server_state()
