@@ -1318,5 +1318,47 @@ pkgs.testers.runNixOSTest {
         )
         agent.wait_for_file(closure, timeout=60)
         agent.succeed(f"grep -qxF '{toplevel}' {closure}")
+
+    with subtest("a reload request restarts the daemons through their units"):
+        # wazuh-agentd writes the request file when the manager sends a new
+        # shared configuration (agent patch 11). This VM has no manager, so
+        # the test writes the file as the wazuh user. checks.server-enrollment
+        # covers the request from a real manager.
+        request = "/var/ossec/var/run/reload-request"
+        restarted = ["wazuh-logcollector", "wazuh-syscheckd", "wazuh-modulesd"]
+
+        def main_pids():
+            return {
+                d: agent.succeed(f"systemctl show -p MainPID --value {d}.service").strip()
+                for d in restarted
+            }
+
+        for d in restarted:
+            agent.succeed(f"systemctl start {d}.service")
+        agent.succeed("systemctl is-active wazuh-agent-reload.path")
+        agent.succeed(f"test -f {request}")
+
+        # A rerun of setup is not a request.
+        before = main_pids()
+        assert "0" not in before.values(), before
+        agent.succeed("systemctl start setup-pre-wazuh.service")
+        agent.sleep(5)
+        assert main_pids() == before, f"a rerun of setup restarted a daemon: {before} -> {main_pids()}"
+
+        agent.succeed(f"runuser -u wazuh -- sh -c 'date +%s > {request}'")
+        agent.wait_until_succeeds(
+            "test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success"
+            " && test \"$(systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service)\" != 0",
+            timeout=60,
+        )
+        after = main_pids()
+        for d in restarted:
+            assert after[d] not in ("0", before[d]), f"{d} did not restart: {before[d]} -> {after[d]}"
+            # The new process is the main process of its unit, in its sandbox.
+            agent.succeed(f"systemctl is-active {d}.service")
+            agent.succeed(
+                f"test \"$(systemctl show -p ControlGroup --value {d}.service)\""
+                f" = \"/$(cut -d/ -f2- /proc/{after[d]}/cgroup)\""
+            )
   '';
 }

@@ -303,6 +303,47 @@ pkgs.testers.runNixOSTest {
             server_state()
             raise
 
+    with subtest("a changed shared configuration reaches the agent daemons"):
+        # The manager sends a new agent.conf. wazuh-agentd checks it and writes
+        # the reload request (agent patch 11), and wazuh-agent-reload restarts
+        # the daemons through their units. Before that fix, execd ran
+        # bin/wazuh-control, which failed, and logcollector kept the old
+        # configuration.
+        stamp = "systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service"
+        before = int(agent.succeed(stamp).strip() or 0)
+        agent.succeed("echo first > /var/log/reload-probe.log")
+        server.succeed(
+            "runuser -u wazuh -- sh -c 'cat > /var/ossec/etc/shared/default/agent.conf' <<'XML'\n"
+            "<agent_config>\n"
+            "  <localfile>\n"
+            "    <log_format>syslog</log_format>\n"
+            "    <location>/var/log/reload-probe.log</location>\n"
+            "  </localfile>\n"
+            "</agent_config>\n"
+            "XML"
+        )
+        try:
+            agent.wait_until_succeeds(
+                "grep -q reload-probe.log /var/ossec/etc/shared/agent.conf", timeout=300
+            )
+            agent.wait_until_succeeds(
+                f"test \"$({stamp})\" -gt {before}"
+                " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
+                timeout=120,
+            )
+            agent.wait_until_succeeds(
+                "journalctl -u wazuh-logcollector | grep -q \"Analyzing file: '/var/log/reload-probe.log'\"",
+                timeout=120,
+            )
+            agent.succeed("journalctl -u wazuh-agentd | grep -q 'Reload agentd'")
+            agent.fail("journalctl -u wazuh-execd | grep -q 'wazuh-control'")
+            for unit in ["wazuh-agentd", "wazuh-logcollector", "wazuh-syscheckd", "wazuh-modulesd", "wazuh-execd"]:
+                agent.succeed(f"systemctl is-active {unit}.service")
+        except Exception:
+            agent_state()
+            server_state()
+            raise
+
     with subtest("keys, API users and agent groups survive server reboot"):
         import json
         server.wait_for_unit("wazuh-api-users.service")
