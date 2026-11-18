@@ -364,6 +364,27 @@ Four limits remain:
 - There is no operating system entry. NixOS itself has no advisory feed
   that the manager reads.
 
+### Shared configuration from the manager
+
+The manager can send an `agent.conf` to the agents of a group. The agent
+writes it to `etc/shared/agent.conf`.
+
+`wazuh-agentd` checks the new file. If the file is valid, `wazuh-agentd`
+writes `var/run/reload-request`. The `wazuh-agent-reload` path unit sees the
+write and starts the `wazuh-agent-reload` service. The service restarts each
+daemon except `wazuh-agentd` through its unit, and then sends `SIGUSR1` to
+`wazuh-agentd`. The new configuration is then active.
+
+Upstream uses `bin/wazuh-control reload` for this step. That script starts
+the daemons outside their units, so the package replaces the step (patch 11
+in `pkgs/patches`). The reload does not need active response.
+
+To see the last reload, use this command:
+
+```
+systemctl status wazuh-agent-reload.service
+```
+
 ### Active response
 
 Active response is off by default. That is what the sandbox already enforced

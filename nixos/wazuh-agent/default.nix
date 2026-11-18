@@ -10,6 +10,10 @@ let
   wazuhGroup = wazuhUser;
   stateDir = "/var/ossec";
   enrollmentPasswordCredential = "wazuh-agent-auth-password";
+  # wazuh-agentd writes this file when a new shared configuration from the
+  # manager is valid (agent patch 11). The wazuh-agent-reload path unit
+  # watches it.
+  reloadRequest = "${stateDir}/var/run/reload-request";
   cfg = config.services.wazuh-agent;
   pkg = cfg.package;
   configuredXml = optionalString (cfg.config != null) cfg.config + cfg.extraConfig;
@@ -229,6 +233,14 @@ let
     chown -R ${wazuhUser}:${wazuhGroup} ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)}
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type d -exec chmod 750 {} +
     find ${concatStringsSep " " (map (dir: "${stateDir}/${dir}") stateDirs)} -type f -exec chmod 640 {} +
+
+    # The file that wazuh-agentd writes to request a reload. It exists before
+    # the path unit watches it, and a rerun of this script does not write it.
+    # A write is a request, so a rerun must not make one.
+    install -d -m 0750 -o ${wazuhUser} -g ${wazuhGroup} ${stateDir}/var/run
+    if [ ! -e ${reloadRequest} ]; then
+      install -m 0640 -o ${wazuhUser} -g ${wazuhGroup} /dev/null ${reloadRequest}
+    fi
 
     replace_link ${generatedConfig} ${stateDir}/etc/ossec.conf
 
@@ -680,6 +692,9 @@ let
       ];
     environment = {
       WAZUH_HOME = stateDir;
+    }
+    // optionalAttrs (d == "wazuh-agentd") {
+      WAZUH_RELOAD_REQUEST = reloadRequest;
     };
 
     serviceConfig =
@@ -1593,7 +1608,45 @@ in
       pathConfig.PathChanged = "/nix/var/nix/profiles";
     };
 
+    # A new shared configuration from the manager.
+    #
+    # Upstream, wazuh-agentd asks wazuh-execd to run "bin/wazuh-control
+    # reload". That script stops and starts the daemons through pid files,
+    # outside their units and sandboxes, and under this layout it fails at
+    # its configuration test. So the request went nowhere, and a changed
+    # agent.conf was never applied.
+    #
+    # With agent patch 11, wazuh-agentd writes reloadRequest instead. It does
+    # that only after it checked the new configuration (verifyRemoteConf),
+    # and after the shared files are complete. This path unit sees the write,
+    # and the service below does what the script was meant to do: restart
+    # each daemon except agentd, then send SIGUSR1 to agentd.
+    #
+    # Every daemon can write var/run, so every daemon can request a restart
+    # of its siblings. The request carries no data, and the service runs no
+    # command that a daemon chooses.
+    systemd.paths.wazuh-agent-reload = {
+      description = "Watch for a reload request from wazuh-agentd";
+      wantedBy = [ "wazuh.target" ];
+      after = [ "setup-pre-wazuh.service" ];
+      wants = [ "setup-pre-wazuh.service" ];
+      pathConfig.PathChanged = reloadRequest;
+    };
     systemd.services = listToAttrs (map (d: nameValuePair d (mkService d)) daemons) // {
+      wazuh-agent-reload = {
+        description = "Apply a new shared configuration to the Wazuh agent daemons";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = [
+            "${config.systemd.package}/bin/systemctl try-restart ${
+              concatMapStringsSep " " (d: "${d}.service") (filter (d: d != "wazuh-agentd") daemons)
+            }"
+            # The "-" is for an agent that has no key yet: agentd does not run,
+            # and the other daemons still get the new configuration.
+            "-${config.systemd.package}/bin/systemctl kill --kill-whom=main --signal=SIGUSR1 wazuh-agentd.service"
+          ];
+        };
+      };
       wazuh-agent-auth = {
         description = "Enroll the Wazuh agent with its manager";
         after = [

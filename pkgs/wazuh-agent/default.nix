@@ -96,6 +96,7 @@ stdenv.mkDerivation {
     ../patches/05-fix-active-response-lock-mode.patch
     ../patches/06-collect-nix-store-packages.patch
     ../patches/10-set-enrollment-recv-timeout.patch
+    ../patches/11-request-reload-through-a-file.patch
   ];
 
   # GCC 13 and later reject the incompatible pointer types in the vendored
