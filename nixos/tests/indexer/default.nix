@@ -16,8 +16,16 @@ let
     tls.services.wazuh-indexer.tls.ca = lib.mkForce (toString (pkgs.runCommand "ca-with-rogue.pem" { } ''
       cat ${pki.ca} ${rogue.ca} > $out
     ''));
-    # A restart of the indexer no longer reruns securityadmin.
-    revert.systemd.services.wazuh-indexer-security.partOf = lib.mkForce [ ];
+    # A restart of the indexer no longer reruns securityadmin. Three links
+    # each rerun it: partOf and requires stop it with the indexer, and the
+    # indexer's wants starts it again. partOf alone did not plant the gap.
+    # The unit still starts once at boot, from multi-user.target.
+    revert.systemd.services = {
+      wazuh-indexer-security.wantedBy = [ "multi-user.target" ];
+      wazuh-indexer-security.partOf = lib.mkForce [ ];
+      wazuh-indexer-security.requires = lib.mkForce [ ];
+      wazuh-indexer.wants = lib.mkForce [ "network-online.target" ];
+    };
     # The data directory does not survive a reboot.
     reboot.virtualisation.fileSystems."/var/lib/wazuh-indexer" = {
       device = "tmpfs";
