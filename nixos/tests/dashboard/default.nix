@@ -82,12 +82,18 @@ pkgs.testers.runNixOSTest {
     http_code = "curl --silent --output /dev/null --max-time 10 --write-out '%{http_code}' "
 
     with subtest("plain HTTP on the dashboard port gets no HTTP answer"):
-        # Positive control: the listener answers HTTPS, with any status.
-        dashboard.wait_until_succeeds("test \"$(" + http_code + "--cacert ${pki.ca} https://dashboard:5601/api/status)\" != 000", timeout=600)
+        # Wait until the listener answers either scheme, so that neither
+        # assertion below can pass on a listener that is not up yet.
+        https = http_code + "--cacert ${pki.ca} https://dashboard:5601/api/status"
+        plain = http_code + "http://dashboard:5601/api/status"
+        dashboard.wait_until_succeeds(f"test \"$({https})$({plain})\" != 000000", timeout=600)
         # The TLS listener closes on a plain request: curl reports 000. A
         # redirect to HTTPS would also be safe, but this module has none.
-        answer = dashboard.succeed(http_code + "http://dashboard:5601/api/status || true").strip()
+        answer = dashboard.succeed(plain + " || true").strip()
         assert answer == "000", f"plain HTTP got status {answer}"
+        # Positive control: the same listener answers HTTPS, with any status.
+        answer = dashboard.succeed(https + " || true").strip()
+        assert answer != "000", "HTTPS got no answer"
 
     dashboard.wait_until_succeeds("curl --fail --silent --cacert ${pki.ca} https://dashboard:5601/api/status -u 'admin:Test-password-42!' | jq -e '.status.overall.state == \"green\"'", timeout=600)
 
