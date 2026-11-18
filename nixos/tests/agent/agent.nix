@@ -46,6 +46,9 @@ pkgs.testers.runNixOSTest {
       environment.systemPackages = [
         pkgs.jq
         pkgs.sqlite
+        # The enrollment timeout subtest needs a listener that never answers.
+        pkgs.socat
+        pkgs.strace
       ];
     };
 
@@ -264,6 +267,42 @@ pkgs.testers.runNixOSTest {
         agent.succeed("grep -qx test-enrollment-password /var/ossec/etc/authd.pass")
         agent.succeed("test $(stat -c %U:%G /var/ossec/etc/authd.pass) = wazuh:wazuh")
         agent.succeed("test $(stat -c %a /var/ossec/etc/authd.pass) = 640")
+
+    with subtest("agent-auth waits for a slow manager"):
+        # Patch 10. agent-auth read its receive timeout from memory that
+        # nothing had set, and in CI the value was 1 second. A manager that
+        # answered later kept the registration and the agent got no key.
+        # The listener here (socat -u) reads and never answers, so the
+        # TLS handshake cannot complete. `timeout` must be what stops
+        # agent-auth (exit 124). An exit before that is the old behavior.
+        agent.succeed(
+            "systemd-run --unit=silent-authd $(command -v socat) -u TCP-LISTEN:1599,fork,reuseaddr OPEN:/dev/null"
+        )
+        agent.wait_for_open_port(1599)
+        # The command line of the unit, with the host and port replaced.
+        # The value in the unset field depended on what the process did
+        # before, so the test runs what the unit runs.
+        cmd = agent.succeed(
+            "sed -n 's/^ExecStart=//p' /etc/systemd/system/wazuh-agent-auth.service"
+            " | sed -E 's/ -m [^ ]+/ -m 127.0.0.1/; s/ -p [0-9]+/ -p 1599/'"
+        ).strip()
+        assert "-m 127.0.0.1" in cmd and "-p 1599" in cmd, f"unexpected ExecStart: {cmd!r}"
+        status, out = agent.execute(
+            "runuser -u wazuh -- env WAZUH_HOME=/var/ossec timeout 10"
+            f" strace -f -e trace=setsockopt {cmd} 2>&1"
+        )
+        agent.log(out)
+        assert "Requesting a key from server" in out, f"agent-auth did not start: {out!r}"
+        # The direct evidence: the timeout that agent-auth gives the kernel.
+        timeouts = [l for l in out.splitlines() if "SO_RCVTIMEO" in l]
+        assert timeouts, f"agent-auth set no receive timeout: {out!r}"
+        # strace prints the timeval as bytes: 8 for the seconds and 8 for the
+        # microseconds, little-endian. 60 is "<". The unpatched package gave
+        # "!" here, which is 33, a value that nothing in the source sets.
+        want = '"<' + r"\0" * 15 + '"'
+        assert all(want in l for l in timeouts), f"receive timeout is not 60 s: {timeouts!r}"
+        assert status == 124, f"agent-auth stopped before 10 s (exit {status}): {out!r}"
+        agent.succeed("systemctl stop silent-authd.service")
 
     with subtest("no daemon is reachable through a setuid wrapper"):
         for daemon in daemons:
