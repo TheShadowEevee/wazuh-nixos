@@ -1627,6 +1627,14 @@ in
     # command that a daemon chooses.
     systemd.paths.wazuh-agent-reload = {
       description = "Watch for a reload request from wazuh-agentd";
+      # A path unit is ordered before paths.target, and so before basic.target.
+      # setup-pre-wazuh starts after basic.target, and this unit starts after
+      # setup-pre-wazuh, because the request file must exist first. That is a
+      # cycle, and systemd breaks it by dropping the setup job. So this unit
+      # takes no default dependencies and names the shutdown ordering itself.
+      unitConfig.DefaultDependencies = false;
+      before = [ "shutdown.target" ];
+      conflicts = [ "shutdown.target" ];
       wantedBy = [ "wazuh.target" ];
       after = [ "setup-pre-wazuh.service" ];
       wants = [ "setup-pre-wazuh.service" ];

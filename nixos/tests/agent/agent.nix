@@ -1336,6 +1336,9 @@ pkgs.testers.runNixOSTest {
         for d in restarted:
             agent.succeed(f"systemctl start {d}.service")
         agent.succeed("systemctl is-active wazuh-agent-reload.path")
+        # An ordering cycle makes systemd drop a job at boot. The first version
+        # of the path unit had one with setup-pre-wazuh.
+        agent.fail("journalctl -b | grep -q 'ordering cycle'")
         agent.succeed(f"test -f {request}")
 
         # A rerun of setup is not a request.
