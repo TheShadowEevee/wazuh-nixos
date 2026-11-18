@@ -335,7 +335,7 @@ pkgs.testers.runNixOSTest {
                 "journalctl -u wazuh-logcollector | grep -q \"Analyzing file: '/var/log/reload-probe.log'\"",
                 timeout=120,
             )
-            agent.succeed("journalctl -u wazuh-agentd | grep -q 'Reload agentd'")
+            agent.wait_until_succeeds("journalctl -u wazuh-agentd | grep -q 'Reload agentd'", timeout=60)
             agent.fail("journalctl -u wazuh-execd | grep -q 'wazuh-control'")
             for unit in ["wazuh-agentd", "wazuh-logcollector", "wazuh-syscheckd", "wazuh-modulesd", "wazuh-execd"]:
                 agent.succeed(f"systemctl is-active {unit}.service")

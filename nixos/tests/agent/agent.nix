@@ -1353,9 +1353,17 @@ pkgs.testers.runNixOSTest {
         assert main_pids() == before, f"a rerun of setup restarted a daemon: {before} -> {main_pids()}"
 
         agent.succeed(f"runuser -u wazuh -- sh -c 'date +%s > {request}'")
+        # The service is a oneshot. Its Result reads "success" while it runs, so
+        # the wait is on the daemons: each has a new main process.
+        for d in restarted:
+            agent.wait_until_succeeds(
+                f"pid=$(systemctl show -p MainPID --value {d}.service)"
+                f" && test \"$pid\" != 0 && test \"$pid\" != {before[d]}",
+                timeout=60,
+            )
         agent.wait_until_succeeds(
-            "test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success"
-            " && test \"$(systemctl show -p ExecMainStartTimestampMonotonic --value wazuh-agent-reload.service)\" != 0",
+            "test \"$(systemctl show -p ActiveState --value wazuh-agent-reload.service)\" = inactive"
+            " && test \"$(systemctl show -p Result --value wazuh-agent-reload.service)\" = success",
             timeout=60,
         )
         after = main_pids()
