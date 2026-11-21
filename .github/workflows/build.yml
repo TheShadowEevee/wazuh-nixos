@@ -53,8 +53,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: exit 1
-
       - name: Free disk space
         # The runner image ships toolchains that this build never uses. The
         # Wazuh dependency tarballs and the build tree need the room.
