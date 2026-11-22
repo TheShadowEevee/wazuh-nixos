@@ -7,7 +7,7 @@ import sys
 
 credentials = pathlib.Path(os.environ["CREDENTIALS_DIRECTORY"])
 file = json.loads(pathlib.Path(sys.argv[1]).read_text())
-domains = file["config"]["dynamic"]["authc"]
+domains = json.loads(file["config"]["dynamic"]["authc"])
 i = 0
 for domain in domains:
     if domain["http_authenticator"]["config"]["exchange_key_file"] != null:
