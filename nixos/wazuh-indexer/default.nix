@@ -643,7 +643,7 @@ in
         chmod -R u+w /run/wazuh-indexer-security
         python3 ${./users.py} ${usersSpec} /run/wazuh-indexer-security/internal_users.yml
         python3 ${./domains.py} ${generatedSecuritySettings} /run/wazuh-indexer-security/config.yml
-        cp ${generatedRoles} /run/wazuh-indexer-security
+        cp ${generatedRoles} /run/wazuh-indexer-security/roles_mapping.yml
         exec ${cfg.package}/bin/wazuh-indexer-securityadmin \
           -h ${lib.escapeShellArg cfg.admin.host} -p ${toString cfg.port} \
           -cn ${lib.escapeShellArg cfg.clusterName} \
