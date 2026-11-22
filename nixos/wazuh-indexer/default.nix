@@ -513,25 +513,37 @@ in
         ++ lib.imap0 (i: name: "user-${toString i}:${cfg.users.${name}.passwordHashFile}") userNames
         ++ lib.imap0 (
           i: domain:
-          lib.mkIf (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) lib.mkIf
-            (
-              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
-              != ""
-            )
-            "domain-${toString i}-exchange_key_file:${
-              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
-            }"
+          if (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) then
+            if
+              (
+                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
+                != ""
+              )
+            then
+              "domain-${toString i}-exchange_key_file:${
+                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
+              }"
+            else
+              ""
+          else
+            ""
         ) cfg.securitySettings.authc
         ++ lib.imap0 (
           i: domain:
-          lib.mkIf (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) lib.mkIf
-            (
-              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
-              != ""
-            )
-            "domain-${toString i}-signing_key_file:${
-              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
-            }"
+          if (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) then
+            if
+              (
+                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
+                != ""
+              )
+            then
+              "domain-${toString i}-signing_key_file:${
+                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
+              }"
+            else
+              ""
+          else
+            ""
         ) cfg.securitySettings.authc;
         Restart = "on-failure";
         RestartSec = 5;
