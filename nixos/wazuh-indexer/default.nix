@@ -188,7 +188,7 @@ in
       authc = mkOption {
         default = { };
         description = "List of Authentication Domains";
-        type = types.attrsOf (
+        type = types.listOf (
           types.submodule {
             options = {
               http_enabled = mkOption {
