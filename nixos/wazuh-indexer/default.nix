@@ -361,15 +361,18 @@ in
                             };
                             entity_id = mkOption {
                               type = types.str;
+                              default = "";
                             };
                           };
                           sp = {
                             entity_id = mkOption {
                               type = types.str;
+                              default = "";
                             };
                           };
                           kibana_url = mkOption {
                             type = types.str;
+                            default = "";
                           };
                           roles_key = mkOption {
                             type = types.str;
