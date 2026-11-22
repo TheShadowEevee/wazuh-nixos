@@ -201,7 +201,7 @@ in
               };
               order = mkOption {
                 type = types.int;
-                default = 0;
+                default = "0";
               };
               http_authenticator = mkOption {
                 type = types.submodule {
@@ -263,16 +263,16 @@ in
                           };
                           jwt_url_parameter = mkOption {
                             type = types.str;
-                            default = null;
+                            default = "";
                           };
                           jwt_clock_skew_tolerance_seconds = mkOption {
                             type = types.str;
-                            default = 30;
+                            default = "30";
                           };
                           # roles_key is used again (first used in SAML) here
                           subject_key = mkOption {
                             type = types.str;
-                            default = null;
+                            default = "";
                           };
                           # ClientCert
                           username_attribute = mkOption {
@@ -302,7 +302,7 @@ in
                           };
                           bind_dn = mkOption {
                             type = types.str;
-                            default = null;
+                            default = "";
                           };
                           passwordFile = fileOption "Password File for LDAP Bind DN";
                           userbase = mkOption {
@@ -353,7 +353,7 @@ in
                           };
                           bind_dn = mkOption {
                             type = types.str;
-                            default = null;
+                            default = "";
                           };
                           passwordFile = fileOption "Password File for LDAP Bind DN";
                           userbase = mkOption {
@@ -366,7 +366,7 @@ in
                           };
                           username_attribute = mkOption {
                             type = types.str;
-                            default = null;
+                            default = "";
                           };
                         };
                       };
