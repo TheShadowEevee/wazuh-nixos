@@ -1,19 +1,25 @@
 """Render JSON (valid YAML) without placing secrets in the store."""
+
 import json
 import os
 import pathlib
-import re
 import sys
 
 credentials = pathlib.Path(os.environ["CREDENTIALS_DIRECTORY"])
 file = json.loads(pathlib.Path(sys.argv[1]).read_text())
+
 domains = file["config"]["dynamic"]["authc"]
-i = 0
-for domain in domains:
-    if domain["http_authenticator"]["config"]["exchange_key_file"] != null:
-        domain["http_authenticator"]["config"]["exchange_key"] = (credentials / "domain-" + i + "-signing_key_file").read_text().rstrip("\r\n")
-    if domain["http_authenticator"]["config"]["signing_key_file"] != null:
-        domain["http_authenticator"]["config"]["signing_key"] = (credentials / "domain-" + i + "-signing_key_file").read_text().rstrip("\r\n")
-    i += 1
-file["config"]["dynamic"]["authc"] = domains
-pathlib.Path(sys.argv[2]).write_text(json.dumps(file))
+
+for name, domain in domains.items():
+    config = domain["http_authenticator"]["config"]
+
+    for key_type in ("exchange", "signing"):
+        key_file = config.pop(f"{key_type}_key_file", None)
+
+        if key_file:
+            credential_file = credentials / f"{name}_{key_type}_key_file"
+            config[key_type] = credential_file.read_text().rstrip("\r\n")
+
+pathlib.Path(sys.argv[2]).write_text(
+    json.dumps(file, indent=2) + "\n"
+)
