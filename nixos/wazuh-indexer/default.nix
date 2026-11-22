@@ -469,7 +469,7 @@ in
                 type = types.submodule {
                   options = {
                     type = mkOption {
-                      type = types.strMatching "(ldap|noop)";
+                      type = types.strMatching "(ldap|intern|noop)";
                       default = "basic";
                     };
                     config = mkOption {
