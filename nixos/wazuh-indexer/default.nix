@@ -47,7 +47,7 @@ let
     }
     // lib.optionalAttrs cfg.singleNode { "discovery.type" = "single-node"; };
   generated = pkgs.writeText "opensearch.yml" (builtins.toJSON settings);
-  securitySettings = cfg.settings // {
+  securitySettings = {
     "_meta" = {
       "type" = "config";
       "config_version" = 2;
@@ -513,15 +513,17 @@ in
         ++ lib.imap0 (i: name: "user-${toString i}:${cfg.users.${name}.passwordHashFile}") userNames
         ++ lib.imap0 (
           i: domain:
-          if (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) then
+          if
+            (securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator != null)
+          then
             if
               (
-                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
+                securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
                 != ""
               )
             then
               "domain-${toString i}-exchange_key_file:${
-                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
+                securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
               }"
             else
               ""
@@ -530,15 +532,17 @@ in
         ) cfg.securitySettings.authc
         ++ lib.imap0 (
           i: domain:
-          if (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) then
+          if
+            (securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator != null)
+          then
             if
               (
-                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
+                securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
                 != ""
               )
             then
               "domain-${toString i}-signing_key_file:${
-                securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
+                securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
               }"
             else
               ""
