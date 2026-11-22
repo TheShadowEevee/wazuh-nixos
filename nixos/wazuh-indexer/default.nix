@@ -204,179 +204,175 @@ in
                 default = 0;
               };
               http_authenticator = mkOption {
-                type = types.attrsOf (
-                  types.submodule {
-                    options = {
-                      type = mkOption {
-                        type = types.strMatching "(kerberos|basic|saml|proxy|jwt|clientcert|ldap)";
-                        default = "basic";
-                      };
-                      challenge = mkOption {
-                        type = types.bool;
-                        default = true;
-                      };
-                      config = mkOption {
-                        type = types.submodule {
-                          options = {
-                            # Kerberos
-                            krb_debug = mkOption {
-                              type = types.bool;
-                              default = false;
-                            };
-                            strip_realm_from_principal = mkOption {
-                              type = types.bool;
-                              default = true;
-                            };
-                            # SAML
-                            idp = {
-                              metadata_file = fileOption "SAML Metadata File provided by SAML Provider";
-                              entity_id = mkOption {
-                                type = types.str;
-                              };
-                            };
-                            sp = {
-                              entity_id = mkOption {
-                                type = types.str;
-                              };
-                            };
-                            kibana_url = mkOption {
-                              type = types.str;
-                            };
-                            roles_key = mkOption {
-                              type = types.str;
-                              default = "Roles";
-                            };
-                            exchange_key_file = fileOption "64 Character Generated Exchange Key File";
-                            # Proxy
-                            user_header = mkOption {
-                              type = types.str;
-                              default = "x-proxy-user";
-                            };
-                            roles_header = mkOption {
-                              type = types.str;
-                              default = "x-proxy-roles";
-                            };
-                            # JWT
-                            signing_key_file = fileOption "Base64 encoded HMAC key or public RSA/ECDSA pem key";
-                            jwt_header = mkOption {
-                              type = types.str;
-                              default = "Authorization";
-                            };
-                            jwt_url_parameter = mkOption {
-                              type = types.str;
-                              default = null;
-                            };
-                            jwt_clock_skew_tolerance_seconds = mkOption {
-                              type = types.str;
-                              default = 30;
-                            };
-                            # roles_key is used again (first used in SAML) here
-                            subject_key = mkOption {
-                              type = types.str;
-                              default = null;
-                            };
-                            # ClientCert
-                            username_attribute = mkOption {
-                              type = types.str;
-                              default = "cn";
-                            };
-                            # LDAP
-                            enable_ssl = mkOption {
-                              type = types.bool;
-                              default = false;
-                            };
-                            enable_start_tls = mkOption {
-                              type = types.bool;
-                              default = false;
-                            };
-                            enable_ssl_client_auth = mkOption {
-                              type = types.bool;
-                              default = false;
-                            };
-                            verify_hostnames = mkOption {
-                              type = types.bool;
-                              default = true;
-                            };
-                            hosts = mkOption {
-                              type = types.listOf types.str;
-                              default = [ "localhost:8389" ];
-                            };
-                            bind_dn = mkOption {
-                              type = types.str;
-                              default = null;
-                            };
-                            passwordFile = fileOption "Password File for LDAP Bind DN";
-                            userbase = mkOption {
-                              type = types.str;
-                              default = "ou=people,dc=example,dc=com";
-                            };
-                            usersearch = mkOption {
-                              type = types.str;
-                              default = "(sAMAccountName={0})";
-                            };
-                            # username_attribute is used again (first used in ClientCert) here
+                type = types.submodule {
+                  options = {
+                    type = mkOption {
+                      type = types.strMatching "(kerberos|basic|saml|proxy|jwt|clientcert|ldap)";
+                      default = "basic";
+                    };
+                    challenge = mkOption {
+                      type = types.bool;
+                      default = true;
+                    };
+                    config = mkOption {
+                      type = types.submodule {
+                        options = {
+                          # Kerberos
+                          krb_debug = mkOption {
+                            type = types.bool;
+                            default = false;
                           };
+                          strip_realm_from_principal = mkOption {
+                            type = types.bool;
+                            default = true;
+                          };
+                          # SAML
+                          idp = {
+                            metadata_file = fileOption "SAML Metadata File provided by SAML Provider";
+                            entity_id = mkOption {
+                              type = types.str;
+                            };
+                          };
+                          sp = {
+                            entity_id = mkOption {
+                              type = types.str;
+                            };
+                          };
+                          kibana_url = mkOption {
+                            type = types.str;
+                          };
+                          roles_key = mkOption {
+                            type = types.str;
+                            default = "Roles";
+                          };
+                          exchange_key_file = fileOption "64 Character Generated Exchange Key File";
+                          # Proxy
+                          user_header = mkOption {
+                            type = types.str;
+                            default = "x-proxy-user";
+                          };
+                          roles_header = mkOption {
+                            type = types.str;
+                            default = "x-proxy-roles";
+                          };
+                          # JWT
+                          signing_key_file = fileOption "Base64 encoded HMAC key or public RSA/ECDSA pem key";
+                          jwt_header = mkOption {
+                            type = types.str;
+                            default = "Authorization";
+                          };
+                          jwt_url_parameter = mkOption {
+                            type = types.str;
+                            default = null;
+                          };
+                          jwt_clock_skew_tolerance_seconds = mkOption {
+                            type = types.str;
+                            default = 30;
+                          };
+                          # roles_key is used again (first used in SAML) here
+                          subject_key = mkOption {
+                            type = types.str;
+                            default = null;
+                          };
+                          # ClientCert
+                          username_attribute = mkOption {
+                            type = types.str;
+                            default = "cn";
+                          };
+                          # LDAP
+                          enable_ssl = mkOption {
+                            type = types.bool;
+                            default = false;
+                          };
+                          enable_start_tls = mkOption {
+                            type = types.bool;
+                            default = false;
+                          };
+                          enable_ssl_client_auth = mkOption {
+                            type = types.bool;
+                            default = false;
+                          };
+                          verify_hostnames = mkOption {
+                            type = types.bool;
+                            default = true;
+                          };
+                          hosts = mkOption {
+                            type = types.listOf types.str;
+                            default = [ "localhost:8389" ];
+                          };
+                          bind_dn = mkOption {
+                            type = types.str;
+                            default = null;
+                          };
+                          passwordFile = fileOption "Password File for LDAP Bind DN";
+                          userbase = mkOption {
+                            type = types.str;
+                            default = "ou=people,dc=example,dc=com";
+                          };
+                          usersearch = mkOption {
+                            type = types.str;
+                            default = "(sAMAccountName={0})";
+                          };
+                          # username_attribute is used again (first used in ClientCert) here
                         };
                       };
                     };
-                  }
-                );
+                  };
+                };
               };
               authentication_backend = mkOption {
-                type = types.attrsOf (
-                  types.submodule {
-                    options = {
-                      type = mkOption {
-                        type = types.strMatching "(ldap|noop)";
-                        default = "basic";
-                      };
-                      config = mkOption {
-                        type = types.submodule {
-                          options = {
-                            # LDAP
-                            enable_ssl = mkOption {
-                              type = types.bool;
-                              default = false;
-                            };
-                            enable_start_tls = mkOption {
-                              type = types.bool;
-                              default = false;
-                            };
-                            enable_ssl_client_auth = mkOption {
-                              type = types.bool;
-                              default = false;
-                            };
-                            verify_hostnames = mkOption {
-                              type = types.bool;
-                              default = true;
-                            };
-                            hosts = mkOption {
-                              type = types.listOf types.str;
-                              default = [ "localhost:8389" ];
-                            };
-                            bind_dn = mkOption {
-                              type = types.str;
-                              default = null;
-                            };
-                            passwordFile = fileOption "Password File for LDAP Bind DN";
-                            userbase = mkOption {
-                              type = types.str;
-                              default = "ou=people,dc=example,dc=com";
-                            };
-                            usersearch = mkOption {
-                              type = types.str;
-                              default = "(sAMAccountName={0})";
-                            };
-                            username_attribute = mkOption {
-                              type = types.str;
-                              default = null;
-                            };
+                type = types.submodule {
+                  options = {
+                    type = mkOption {
+                      type = types.strMatching "(ldap|noop)";
+                      default = "basic";
+                    };
+                    config = mkOption {
+                      type = types.submodule {
+                        options = {
+                          # LDAP
+                          enable_ssl = mkOption {
+                            type = types.bool;
+                            default = false;
+                          };
+                          enable_start_tls = mkOption {
+                            type = types.bool;
+                            default = false;
+                          };
+                          enable_ssl_client_auth = mkOption {
+                            type = types.bool;
+                            default = false;
+                          };
+                          verify_hostnames = mkOption {
+                            type = types.bool;
+                            default = true;
+                          };
+                          hosts = mkOption {
+                            type = types.listOf types.str;
+                            default = [ "localhost:8389" ];
+                          };
+                          bind_dn = mkOption {
+                            type = types.str;
+                            default = null;
+                          };
+                          passwordFile = fileOption "Password File for LDAP Bind DN";
+                          userbase = mkOption {
+                            type = types.str;
+                            default = "ou=people,dc=example,dc=com";
+                          };
+                          usersearch = mkOption {
+                            type = types.str;
+                            default = "(sAMAccountName={0})";
+                          };
+                          username_attribute = mkOption {
+                            type = types.str;
+                            default = null;
                           };
                         };
                       };
                     };
-                  }
-                );
+                  };
+                };
                 default = {
                   type = "noop";
                 };
