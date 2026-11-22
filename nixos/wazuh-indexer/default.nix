@@ -57,7 +57,10 @@ let
         "http" = cfg.securitySettings.http;
         "authc" = lib.listToAttrs (
           lib.imap0 (
-            i: domain: lib.nameValuePair "${toString i}_auth_domain" domain
+            i: domain:
+            lib.nameValuePair "${toString i}_auth_domain" (
+              lib.mergeAttrs domain { http_authenticator.config.metadata_file = "metadata_${toString i}.xml"; }
+            )
           ) cfg.securitySettings.authc
         );
         "authz" = cfg.securitySettings.authz;
@@ -447,6 +450,27 @@ in
         cp -r ${home}/config/. ${runtime}/
         chmod -R u+w ${runtime}
         cp ${generated} ${runtime}/opensearch.yml
+      ''
+      ++ lib.imap0 (
+        i: domain:
+        if
+          (securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator != null)
+        then
+          if
+            (
+              securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.metadata_file
+              != ""
+            )
+          then
+            "cp ${
+              securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.metadata_file
+            } ${runtime}/metadata_${toString i}.xml"
+          else
+            ""
+        else
+          ""
+      ) cfg.securitySettings.authc
+      ++ ''
         install -m600 "$CREDENTIALS_DIRECTORY/ca" ${runtime}/ca.pem
         install -m600 "$CREDENTIALS_DIRECTORY/certificate" ${runtime}/node.pem
         install -m600 "$CREDENTIALS_DIRECTORY/key" ${runtime}/node.key
