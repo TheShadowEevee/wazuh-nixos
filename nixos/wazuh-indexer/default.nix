@@ -489,9 +489,8 @@ in
         done
         cp -r ${home}/config/opensearch-security/. /run/wazuh-indexer-security/
         chmod -R u+w /run/wazuh-indexer-security
-        cp ${generatedSecuritySettings} /run/wazuh-indexer-security
         python3 ${./users.py} ${usersSpec} /run/wazuh-indexer-security/internal_users.yml
-        python3 ${./domains.py} /run/wazuh-indexer-security/config.yml
+        python3 ${./domains.py} ${generatedSecuritySettings} /run/wazuh-indexer-security/config.yml
         exec ${cfg.package}/bin/wazuh-indexer-securityadmin \
           -h ${lib.escapeShellArg cfg.admin.host} -p ${toString cfg.port} \
           -cn ${lib.escapeShellArg cfg.clusterName} \

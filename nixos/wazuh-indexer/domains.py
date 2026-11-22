@@ -16,4 +16,4 @@ for domain in domains:
         domain["http_authenticator"]["config"]["signing_key_file"] = (credentials / "domain-" + i + "-signing_key_file").read_text().rstrip("\r\n")
     i += 1
 file["config"]["dynamic"]["authc"] = domains
-pathlib.Path(sys.argv[1]).write_text(json.dumps(file))
+pathlib.Path(sys.argv[2]).write_text(json.dumps(file))
