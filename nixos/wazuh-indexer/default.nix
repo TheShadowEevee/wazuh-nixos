@@ -178,7 +178,7 @@ in
       default = { };
       description = "Additional OpenSearch settings. Module-owned TLS, state paths and endpoints take precedence.";
     };
-    securitySettings = mkOption {
+    securitySettings = {
       # TODO: make properly configurable
       http = mkOption {
         type = types.attrsOf types.anything;
