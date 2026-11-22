@@ -521,7 +521,7 @@ in
                 != ""
               )
             then
-              "domain-${toString i}-exchange_key_file:${
+              "${toString i}_auth_domain_exchange_key_file:${
                 securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
               }"
             else
@@ -540,7 +540,7 @@ in
                 != ""
               )
             then
-              "domain-${toString i}-signing_key_file:${
+              "${toString i}_auth_domain_signing_key_file:${
                 securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
               }"
             else
