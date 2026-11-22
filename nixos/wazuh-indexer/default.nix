@@ -460,11 +460,10 @@ in
           lib.imap0 (
             i: domain:
             let
-              authDomain = cfg.securitySettings.config.dynamic.authc.${toString i + "_auth_domain"};
-              metadataFile = authDomain.http_authenticator.config.metadata_file or "";
+              metadataFile = domain.http_authenticator.config.metadata_file or "";
             in
             lib.optional (
-              authDomain.http_authenticator != null && metadataFile != ""
+              domain.http_authenticator != null && metadataFile != ""
             ) "cp ${lib.escapeShellArg metadataFile} ${runtime}/metadata_${toString i}.xml"
           ) cfg.securitySettings.authc
         )
