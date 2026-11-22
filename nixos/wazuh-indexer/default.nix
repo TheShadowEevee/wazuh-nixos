@@ -446,39 +446,38 @@ in
         OPENSEARCH_PATH_CONF = runtime;
         OPENSEARCH_TMPDIR = "/var/lib/wazuh-indexer/tmp";
       };
-      preStart = ''
-        cp -r ${home}/config/. ${runtime}/
-        chmod -R u+w ${runtime}
-        cp ${generated} ${runtime}/opensearch.yml
-      ''
-      ++ lib.imap0 (
-        i: domain:
-        if
-          (securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator != null)
-        then
-          if
-            (
-              securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.metadata_file
-              != ""
-            )
-          then
-            "cp ${
-              securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.metadata_file
-            } ${runtime}/metadata_${toString i}.xml"
-          else
-            ""
-        else
-          ""
-      ) cfg.securitySettings.authc
-      ++ ''
-        install -m600 "$CREDENTIALS_DIRECTORY/ca" ${runtime}/ca.pem
-        install -m600 "$CREDENTIALS_DIRECTORY/certificate" ${runtime}/node.pem
-        install -m600 "$CREDENTIALS_DIRECTORY/key" ${runtime}/node.key
-        sed -i -e '/^-Xms/d' -e '/^-Xmx/d' \
-          -e 's|/etc/wazuh-indexer|${runtime}|g' ${runtime}/jvm.options
-        printf '\n-Xms${cfg.heapSize}\n-Xmx${cfg.heapSize}\n' >> ${runtime}/jvm.options
-        mkdir -p /var/lib/wazuh-indexer/tmp
-      '';
+      preStart = lib.concatStringsSep "\n" (
+        [
+          ''
+            cp -r ${home}/config/. ${runtime}/
+            chmod -R u+w ${runtime}
+            cp ${generated} ${runtime}/opensearch.yml
+          ''
+        ]
+        ++ lib.concatLists (
+          lib.imap0 (
+            i: domain:
+            let
+              authDomain = securitySettings.config.dynamic.authc.${toString i + "_auth_domain"};
+              metadataFile = authDomain.http_authenticator.config.metadata_file or "";
+            in
+            lib.optional (
+              authDomain.http_authenticator != null && metadataFile != ""
+            ) "cp ${lib.escapeShellArg metadataFile} ${runtime}/metadata_${toString i}.xml"
+          ) cfg.securitySettings.authc
+        )
+        ++ [
+          ''
+            install -m600 "$CREDENTIALS_DIRECTORY/ca" ${runtime}/ca.pem
+            install -m600 "$CREDENTIALS_DIRECTORY/certificate" ${runtime}/node.pem
+            install -m600 "$CREDENTIALS_DIRECTORY/key" ${runtime}/node.key
+            sed -i -e '/^-Xms/d' -e '/^-Xmx/d' \
+              -e 's|/etc/wazuh-indexer|${runtime}|g' ${runtime}/jvm.options
+            printf '\n-Xms${cfg.heapSize}\n-Xmx${cfg.heapSize}\n' >> ${runtime}/jvm.options
+            mkdir -p /var/lib/wazuh-indexer/tmp
+          ''
+        ]
+      );
       serviceConfig = hardening // {
         User = "wazuh-indexer";
         Group = "wazuh-indexer";
