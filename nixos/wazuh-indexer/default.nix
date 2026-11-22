@@ -60,7 +60,7 @@ let
             i: domain:
             lib.nameValuePair "${toString i}_auth_domain" (
               lib.recursiveUpdate domain {
-                http_authenticator.config.metadata_file = "metadata_${toString i}.xml";
+                http_authenticator.config.idp.metadata_file = "metadata_${toString i}.xml";
               }
             )
           ) cfg.securitySettings.authc
@@ -460,7 +460,7 @@ in
           lib.imap0 (
             i: domain:
             let
-              metadataFile = domain.http_authenticator.config.metadata_file or "";
+              metadataFile = domain.http_authenticator.config.idp.metadata_file or "";
             in
             lib.optional (
               domain.http_authenticator != null && metadataFile != ""
