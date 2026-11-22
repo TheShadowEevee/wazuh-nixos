@@ -245,7 +245,12 @@ in
                             type = types.str;
                             default = "Roles";
                           };
-                          exchange_key_file = fileOption "64 Character Generated Exchange Key File";
+                          #exchange_key_file = fileOption "64 Character Generated Exchange Key File";
+                          exchange_key_file = mkOption {
+                            type = types.str;
+                            description = "64 Character Generated Exchange Key File";
+                            default = "";
+                          };
                           # Proxy
                           user_header = mkOption {
                             type = types.str;
@@ -256,7 +261,12 @@ in
                             default = "x-proxy-roles";
                           };
                           # JWT
-                          signing_key_file = fileOption "Base64 encoded HMAC key or public RSA/ECDSA pem key";
+                          #signing_key_file = fileOption "Base64 encoded HMAC key or public RSA/ECDSA pem key";
+                          signing_key_file = mkOption {
+                            type = types.str;
+                            description = "Base64 encoded HMAC key or public RSA/ECDSA pem key";
+                            default = "";
+                          };
                           jwt_header = mkOption {
                             type = types.str;
                             default = "Authorization";
@@ -304,7 +314,12 @@ in
                             type = types.str;
                             default = "";
                           };
-                          passwordFile = fileOption "Password File for LDAP Bind DN";
+                          #passwordFile = fileOption "Password File for LDAP Bind DN";
+                          passwordFile = mkOption {
+                            type = types.str;
+                            description = "Password File for LDAP Bind DN";
+                            default = "";
+                          };
                           userbase = mkOption {
                             type = types.str;
                             default = "ou=people,dc=example,dc=com";
@@ -355,7 +370,12 @@ in
                             type = types.str;
                             default = "";
                           };
-                          passwordFile = fileOption "Password File for LDAP Bind DN";
+                          #passwordFile = fileOption "Password File for LDAP Bind DN";
+                          passwordFile = mkOption {
+                            type = types.str;
+                            description = "Password File for LDAP Bind DN";
+                            default = "";
+                          };
                           userbase = mkOption {
                             type = types.str;
                             default = "ou=people,dc=example,dc=com";
@@ -496,7 +516,7 @@ in
           lib.mkIf (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) lib.mkIf
             (
               securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
-              != null
+              != ""
             )
             "domain-${toString i}-exchange_key_file:${
               securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
@@ -507,7 +527,7 @@ in
           lib.mkIf (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) lib.mkIf
             (
               securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
-              != null
+              != ""
             )
             "domain-${toString i}-signing_key_file:${
               securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
