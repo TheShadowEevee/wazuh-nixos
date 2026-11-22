@@ -59,7 +59,9 @@ let
           lib.imap0 (
             i: domain:
             lib.nameValuePair "${toString i}_auth_domain" (
-              lib.mergeAttrs domain { http_authenticator.config.metadata_file = "metadata_${toString i}.xml"; }
+              lib.recursiveUpdate domain {
+                http_authenticator.config.metadata_file = "metadata_${toString i}.xml";
+              }
             )
           ) cfg.securitySettings.authc
         );
