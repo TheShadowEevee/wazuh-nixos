@@ -460,7 +460,7 @@ in
           lib.imap0 (
             i: domain:
             let
-              authDomain = securitySettings.config.dynamic.authc.${toString i + "_auth_domain"};
+              authDomain = cfg.securitySettings.config.dynamic.authc.${toString i + "_auth_domain"};
               metadataFile = authDomain.http_authenticator.config.metadata_file or "";
             in
             lib.optional (
