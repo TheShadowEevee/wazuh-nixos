@@ -526,9 +526,9 @@ in
                 securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
               }"
             else
-              [ ]
+              "/dev/null"
           else
-            [ ]
+            "/dev/null"
         ) cfg.securitySettings.authc
         ++ lib.imap0 (
           i: domain:
@@ -545,9 +545,9 @@ in
                 securitySettings.config.dynamic.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
               }"
             else
-              [ ]
+              "/dev/null"
           else
-            [ ]
+            "/dev/null"
         ) cfg.securitySettings.authc;
         Restart = "on-failure";
         RestartSec = 5;
