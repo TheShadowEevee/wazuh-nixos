@@ -354,7 +354,11 @@ in
                           };
                           # SAML
                           idp = {
-                            metadata_file = fileOption "SAML Metadata File provided by SAML Provider";
+                            metadata_file = mkOption {
+                              type = types.str;
+                              description = "SAML Metadata File provided by SAML Provider";
+                              default = "";
+                            };
                             entity_id = mkOption {
                               type = types.str;
                             };
