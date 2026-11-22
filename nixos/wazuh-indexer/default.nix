@@ -47,6 +47,24 @@ let
     }
     // lib.optionalAttrs cfg.singleNode { "discovery.type" = "single-node"; };
   generated = pkgs.writeText "opensearch.yml" (builtins.toJSON settings);
+  securitySettings = cfg.settings // {
+    "_meta" = {
+      "type" = "config";
+      "config_version" = 2;
+    };
+    "config" = {
+      "dynamic" = {
+        "http" = cfg.securitySettings.http;
+        "authc" = lib.listToAttrs (
+          lib.imap0 (
+            i: domain: lib.nameValuePair "${toString i}_auth_domain" domain
+          ) cfg.securitySettings.authc
+        );
+        "authz" = cfg.securitySettings.authz;
+      };
+    };
+  };
+  generatedSecuritySettings = pkgs.writeText "config.yml" (builtins.toJSON securitySettings);
   userNames = builtins.attrNames cfg.users;
   usersSpec = pkgs.writeText "indexer-users.json" (
     builtins.toJSON (
@@ -160,6 +178,220 @@ in
       default = { };
       description = "Additional OpenSearch settings. Module-owned TLS, state paths and endpoints take precedence.";
     };
+    securitySettings = mkOption {
+      # TODO: make properly configurable
+      http = mkOption {
+        type = types.attrsOf types.anything;
+        default = { };
+        description = "HTTP OpenSearch Security settings.";
+      };
+      authc = mkOption {
+        default = { };
+        description = "List of Authentication Domains";
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              http_enabled = mkOption {
+                type = types.bool;
+                default = true;
+              };
+              transport_enabled = mkOption {
+                type = types.bool;
+                default = true;
+              };
+              order = mkOption {
+                type = types.int;
+                default = 0;
+              };
+              http_authenticator = mkOption {
+                type = types.attrsOf (
+                  types.submodule {
+                    options = {
+                      type = mkOption {
+                        type = types.strMatching "(kerberos|basic|saml|proxy|jwt|clientcert|ldap)";
+                        default = "basic";
+                      };
+                      challenge = mkOption {
+                        type = types.bool;
+                        default = true;
+                      };
+                      config = mkOption {
+                        type = types.submodule {
+                          options = {
+                            # Kerberos
+                            krb_debug = mkOption {
+                              type = types.bool;
+                              default = false;
+                            };
+                            strip_realm_from_principal = mkOption {
+                              type = types.bool;
+                              default = true;
+                            };
+                            # SAML
+                            idp = {
+                              metadata_file = fileOption "SAML Metadata File provided by SAML Provider";
+                              entity_id = mkOption {
+                                type = types.str;
+                              };
+                            };
+                            sp = {
+                              entity_id = mkOption {
+                                type = types.str;
+                              };
+                            };
+                            kibana_url = mkOption {
+                              type = types.str;
+                            };
+                            roles_key = mkOption {
+                              type = types.str;
+                              default = "Roles";
+                            };
+                            exchange_key_file = fileOption "64 Character Generated Exchange Key File";
+                            # Proxy
+                            user_header = mkOption {
+                              type = types.str;
+                              default = "x-proxy-user";
+                            };
+                            roles_header = mkOption {
+                              type = types.str;
+                              default = "x-proxy-roles";
+                            };
+                            # JWT
+                            signing_key_file = fileOption "Base64 encoded HMAC key or public RSA/ECDSA pem key";
+                            jwt_header = mkOption {
+                              type = types.str;
+                              default = "Authorization";
+                            };
+                            jwt_url_parameter = mkOption {
+                              type = types.str;
+                              default = null;
+                            };
+                            jwt_clock_skew_tolerance_seconds = mkOption {
+                              type = types.str;
+                              default = 30;
+                            };
+                            # roles_key is used again (first used in SAML) here
+                            subject_key = mkOption {
+                              type = types.str;
+                              default = null;
+                            };
+                            # ClientCert
+                            username_attribute = mkOption {
+                              type = types.str;
+                              default = "cn";
+                            };
+                            # LDAP
+                            enable_ssl = mkOption {
+                              type = types.bool;
+                              default = false;
+                            };
+                            enable_start_tls = mkOption {
+                              type = types.bool;
+                              default = false;
+                            };
+                            enable_ssl_client_auth = mkOption {
+                              type = types.bool;
+                              default = false;
+                            };
+                            verify_hostnames = mkOption {
+                              type = types.bool;
+                              default = true;
+                            };
+                            hosts = mkOption {
+                              type = types.listOf types.str;
+                              default = [ "localhost:8389" ];
+                            };
+                            bind_dn = mkOption {
+                              type = types.str;
+                              default = null;
+                            };
+                            passwordFile = fileOption "Password File for LDAP Bind DN";
+                            userbase = mkOption {
+                              type = types.str;
+                              default = "ou=people,dc=example,dc=com";
+                            };
+                            usersearch = mkOption {
+                              type = types.str;
+                              default = "(sAMAccountName={0})";
+                            };
+                            # username_attribute is used again (first used in ClientCert) here
+                          };
+                        };
+                      };
+                    };
+                  }
+                );
+              };
+              authentication_backend = mkOption {
+                type = types.attrsOf (
+                  types.submodule {
+                    options = {
+                      type = mkOption {
+                        type = types.strMatching "(ldap|noop)";
+                        default = "basic";
+                      };
+                      config = mkOption {
+                        type = types.submodule {
+                          options = {
+                            # LDAP
+                            enable_ssl = mkOption {
+                              type = types.bool;
+                              default = false;
+                            };
+                            enable_start_tls = mkOption {
+                              type = types.bool;
+                              default = false;
+                            };
+                            enable_ssl_client_auth = mkOption {
+                              type = types.bool;
+                              default = false;
+                            };
+                            verify_hostnames = mkOption {
+                              type = types.bool;
+                              default = true;
+                            };
+                            hosts = mkOption {
+                              type = types.listOf types.str;
+                              default = [ "localhost:8389" ];
+                            };
+                            bind_dn = mkOption {
+                              type = types.str;
+                              default = null;
+                            };
+                            passwordFile = fileOption "Password File for LDAP Bind DN";
+                            userbase = mkOption {
+                              type = types.str;
+                              default = "ou=people,dc=example,dc=com";
+                            };
+                            usersearch = mkOption {
+                              type = types.str;
+                              default = "(sAMAccountName={0})";
+                            };
+                            username_attribute = mkOption {
+                              type = types.str;
+                              default = null;
+                            };
+                          };
+                        };
+                      };
+                    };
+                  }
+                );
+                default = {
+                  type = "noop";
+                };
+              };
+            };
+          }
+        );
+      };
+      # TODO: make properly configurable
+      authz = mkOption {
+        type = types.attrsOf types.anything;
+        default = { };
+        description = "Authz (Authorization) OpenSearch Security settings.";
+      };
+    };
   };
   config = lib.mkIf cfg.enable {
     assertions = [
@@ -241,7 +473,9 @@ in
         done
         cp -r ${home}/config/opensearch-security/. /run/wazuh-indexer-security/
         chmod -R u+w /run/wazuh-indexer-security
+        cp ${generatedSecuritySettings} /run/wazuh-indexer-security
         python3 ${./users.py} ${usersSpec} /run/wazuh-indexer-security/internal_users.yml
+        python3 ${./domains.py} /run/wazuh-indexer-security/config.yml
         exec ${cfg.package}/bin/wazuh-indexer-securityadmin \
           -h ${lib.escapeShellArg cfg.admin.host} -p ${toString cfg.port} \
           -cn ${lib.escapeShellArg cfg.clusterName} \
@@ -260,7 +494,29 @@ in
           "certificate:${cfg.admin.certificate}"
           "key:${cfg.admin.key}"
         ]
-        ++ lib.imap0 (i: name: "user-${toString i}:${cfg.users.${name}.passwordHashFile}") userNames;
+        ++ lib.imap0 (i: name: "user-${toString i}:${cfg.users.${name}.passwordHashFile}") userNames
+        ++ lib.imap0 (
+          i: domain:
+          lib.mkIf (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) lib.mkIf
+            (
+              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
+              != null
+            )
+            "domain-${toString i}-exchange_key_file:${
+              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.exchange_key_file
+            }"
+        ) cfg.securitySettings.authc
+        ++ lib.imap0 (
+          i: domain:
+          lib.mkIf (securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator != null) lib.mkIf
+            (
+              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
+              != null
+            )
+            "domain-${toString i}-signing_key_file:${
+              securitySettings.authc.${toString i + "_auth_domain"}.http_authenticator.config.signing_key_file
+            }"
+        ) cfg.securitySettings.authc;
         Restart = "on-failure";
         RestartSec = 5;
         TimeoutStartSec = 600;
