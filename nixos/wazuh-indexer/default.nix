@@ -22,6 +22,93 @@ let
   bindAddresses = lib.unique (
     requestedAddresses ++ lib.optional (!(builtins.elem "0.0.0.0" requestedAddresses)) "127.0.0.2"
   );
+  roles = lib.recursiveUpdate {
+    "_meta" = {
+      "type" = "rolesmapping";
+      "config_version" = 2;
+    };
+    "all_access" = {
+      "reserved" = true;
+      "hidden" = false;
+      "backend_roles" = [
+        "admin"
+      ];
+      "hosts" = [ ];
+      "users" = [ ];
+      "and_backend_roles" = [ ];
+    };
+    "own_index" = {
+      "reserved" = false;
+      "hidden" = false;
+      "backend_roles" = [ ];
+      "hosts" = [ ];
+      "users" = [
+        "*"
+      ];
+      "and_backend_roles" = [ ];
+    };
+    "logstash" = {
+      "reserved" = false;
+      "hidden" = false;
+      "backend_roles" = [
+        "logstash"
+      ];
+      "hosts" = [ ];
+      "users" = [ ];
+      "and_backend_roles" = [ ];
+    };
+    "readall" = {
+      "reserved" = true;
+      "hidden" = false;
+      "backend_roles" = [
+        "readall"
+      ];
+      "hosts" = [ ];
+      "users" = [ ];
+      "and_backend_roles" = [ ];
+    };
+    "manage_snapshots" = {
+      "reserved" = true;
+      "hidden" = false;
+      "backend_roles" = [
+        "snapshotrestore"
+      ];
+      "hosts" = [ ];
+      "users" = [ ];
+      "and_backend_roles" = [ ];
+    };
+    "kibana_server" = {
+      "reserved" = true;
+      "hidden" = false;
+      "backend_roles" = [ ];
+      "hosts" = [ ];
+      "users" = [
+        "kibanaserver"
+      ];
+      "and_backend_roles" = [ ];
+    };
+    "kibana_user" = {
+      "reserved" = false;
+      "hidden" = false;
+      "backend_roles" = [
+        "kibanauser"
+      ];
+      "hosts" = [ ];
+      "users" = [ ];
+      "and_backend_roles" = [ ];
+    };
+    "manage_wazuh_index" = {
+      "reserved" = true;
+      "hidden" = false;
+      "backend_roles" = [ ];
+      "hosts" = [ ];
+      "users" = [
+        "kibanaserver"
+      ];
+      "and_backend_roles" = [ ];
+    };
+  } cfg.roles;
+  generatedRoles = pkgs.writeText "roles_mapping.yml" (builtins.toJSON roles);
   settings =
     cfg.settings
     // {
@@ -171,6 +258,40 @@ in
           options = {
             passwordHashFile = fileOption "Runtime file containing a bcrypt password hash.";
             backendRoles = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+            };
+          };
+        }
+      );
+    };
+    roles = mkOption {
+      default = { };
+      description = "List of Authentication Domains";
+      type = types.attrsOf (
+        types.submodule {
+          options = {
+            reserved = mkOption {
+              type = types.bool;
+              default = true;
+            };
+            hidden = mkOption {
+              type = types.bool;
+              default = false;
+            };
+            backend_roles = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+            };
+            hosts = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+            };
+            users = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+            };
+            and_backend_roles = mkOption {
               type = types.listOf types.str;
               default = [ ];
             };
@@ -515,6 +636,7 @@ in
         chmod -R u+w /run/wazuh-indexer-security
         python3 ${./users.py} ${usersSpec} /run/wazuh-indexer-security/internal_users.yml
         python3 ${./domains.py} ${generatedSecuritySettings} /run/wazuh-indexer-security/config.yml
+        cp ${generatedRoles} /run/wazuh-indexer-security
         exec ${cfg.package}/bin/wazuh-indexer-securityadmin \
           -h ${lib.escapeShellArg cfg.admin.host} -p ${toString cfg.port} \
           -cn ${lib.escapeShellArg cfg.clusterName} \
